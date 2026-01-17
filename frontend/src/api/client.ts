@@ -106,3 +106,40 @@ export const healthCheck = async (): Promise<any> => {
     const response = await api.get('/health');
     return response.data;
 };
+
+/**
+ * Simplified API Client for non-axios endpoints
+ * Used for dashboard, settings, audit logs
+ */
+export const apiClient = {
+    async get<T = any>(endpoint: string): Promise<T> {
+        const token = localStorage.getItem('access_token')
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': token ? `Bearer ${token}` : '',
+                'Content-Type': 'application/json'
+            }
+        })
+        if (!response.ok) {
+            throw new Error(`API Error: ${response.statusText}`)
+        }
+        return response.json()
+    },
+
+    async post<T = any>(endpoint: string, data: any): Promise<T> {
+        const token = localStorage.getItem('access_token')
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': token ? `Bearer ${token}` : '',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        })
+        if (!response.ok) {
+            throw new Error(`API Error: ${response.statusText}`)
+        }
+        return response.json()
+    }
+}

@@ -63,11 +63,11 @@ async def get_dashboard_stats(
             .select('id', count='exact')\
             .eq('lawyer_id', lawyer_id)\
             .execute()
-        
+          # Upcoming hearings (next 7 days)
         upcoming_hearings = supabase.table('hearings')\
             .select('id', count='exact')\
             .eq('lawyer_id', lawyer_id)\
-            .gte('date', now.isoformat())\
+            .gte('hearing_date', now.isoformat())\
             .execute()
         
         # Tasks
@@ -188,8 +188,8 @@ async def get_upcoming_hearings(
         result = supabase.table('hearings')\
             .select('*')\
             .eq('lawyer_id', lawyer_id)\
-            .gte('date', now.isoformat())\
-            .order('date', desc=False)\
+            .gte('hearing_date', now.isoformat())\
+            .order('hearing_date', desc=False)\
             .limit(limit)\
             .execute()
         

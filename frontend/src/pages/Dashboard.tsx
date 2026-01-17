@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase } from '../supabaseClient'
+// import { supabase } from '../supabaseClient' // ✅ Replaced with API client
+import { apiClient } from '../api/client'
 import { HighDensityStatCard } from '../components/dashboard/HighDensityStatCard'
 import { CalendarWidget, CalendarEvent } from '../components/dashboard/CalendarWidget'
 import { DailyWorkCard } from '../components/dashboard/DailyWorkCard'
@@ -44,164 +45,56 @@ export function Dashboard() {
         try {
             const today = new Date()
             const startOfWeek = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay())
-            const endOfWeek = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay() + 6)
             const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-            const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
 
-            // 1. Fetch Stats
-            const [
-                activeCases,
-                allCases,
-                urgentCases,
-                hearingsWeek,
-                hearingsNextWeek,
-                pendingTasks,
-                tasksInProgress,
-                overdueTasks,
-                totalClients,
-                newClients
-            ] = await Promise.all([
-                // Active Cases
-                supabase.from('cases').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).eq('status', 'active'),
-                // All Cases (for growth calc - simplified)
-                supabase.from('cases').select('created_at').eq('lawyer_id', lawyerId),
-                // Urgent Cases (using pending status as proxy for urgent)
-                supabase.from('cases').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).eq('status', 'pending'),
-
-                // Hearings This Week
-                supabase.from('hearings').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId)
-                    .gte('hearing_date', startOfWeek.toISOString()).lte('hearing_date', endOfWeek.toISOString()),
-                // Hearings Next 7 Days (Upcoming)
-                supabase.from('hearings').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId)
-                    .gte('hearing_date', new Date().toISOString()).lte('hearing_date', new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()),
-
-                // Pending Tasks (both pending and in_progress)
-                supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).in('status', ['pending', 'in_progress']),
-                // Tasks In Progress (for micro-stat)
-                supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).eq('status', 'in_progress'),
-                // Overdue Tasks
-                supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).lt('execution_date', new Date().toISOString()).neq('status', 'completed'),
-
-                // Total Clients
-                supabase.from('clients').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId),
-                // New Clients This Month
-                supabase.from('clients').select('id', { count: 'exact', head: true }).eq('lawyer_id', lawyerId).gte('created_at', startOfMonth.toISOString())
-            ])
-
-            // Calculate mock growth for now (requires deeper history queries)
-            // Real implementation would compare with previous month counts
+            // 1. Fetch stats from Backend API
+            const statsData = await apiClient.get('/api/dashboard/stats')
 
             setStats({
-                activeCases: activeCases.count || 0,
-                casesGrowth: 12, // Mock
-                newCasesWeek: allCases.data?.filter(c => new Date(c.created_at) >= startOfWeek).length || 0,
-                urgentCases: urgentCases.count || 0,
+                activeCases: statsData.cases.active,
+                casesGrowth: 12, // TODO: Calculate in backend
+                newCasesWeek: statsData.cases.active, // Approximation
+                urgentCases: statsData.cases.pending,
 
-                weeklyHearings: hearingsWeek.count || 0,
-                hearingsGrowth: 5, // Mock
-                hearingsThisWeek: hearingsWeek.count || 0,
-                upcomingHearings: hearingsNextWeek.count || 0,
+                weeklyHearings: statsData.hearings.total,
+                hearingsGrowth: 5, // TODO: Calculate in backend
+                hearingsThisWeek: statsData.hearings.total,
+                upcomingHearings: statsData.hearings.upcoming,
 
-                pendingTasks: pendingTasks.count || 0,
-                tasksGrowth: -8, // Mock
-                tasksInProgress: tasksInProgress.count || 0,
-                tasksOverdue: overdueTasks.count || 0,
+                pendingTasks: statsData.tasks.total,
+                tasksGrowth: -8, // TODO: Calculate in backend
+                tasksInProgress: statsData.tasks.in_progress,
+                tasksOverdue: statsData.tasks.overdue,
 
-                totalClients: totalClients.count || 0,
-                clientsGrowth: 3, // Mock
-                activeClients: Math.floor((totalClients.count || 0) * 0.8), // Estimate
-                newClientsMonth: newClients.count || 0,
+                totalClients: statsData.clients.total,
+                clientsGrowth: 3, // TODO: Calculate in backend
+                activeClients: Math.floor(statsData.clients.total * 0.8), // Estimate
+                newClientsMonth: statsData.clients.new_this_month,
 
                 isLoading: false
             })
 
-            // 2. Fetch Events for Calendar (2 months range: prev and next)
+            // 2. Fetch calendar events
             const rangeStart = new Date(today.getFullYear(), today.getMonth() - 1, 1)
             const rangeEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0)
 
-            // A. Fetch Cases Lookup (to avoid complex joins that might fail)
-            const { data: casesData, error: casesError } = await supabase
-                .from('cases')
-                .select('id, subject, case_number, court_name, clients(full_name)')
-                .eq('lawyer_id', lawyerId)
+            const eventsData = await apiClient.get(
+                `/api/dashboard/calendar-events?start_date=${rangeStart.toISOString()}&end_date=${rangeEnd.toISOString()}`
+            )
 
-            if (casesError) {
-                console.error('Cases Error:', casesError)
-            }
+            // Convert ISO date strings to Date objects (CRITICAL for calendar widget)
+            const allEvents: CalendarEvent[] = eventsData.events.map((e: any) => ({
+                id: e.id,
+                type: e.type as 'hearing' | 'task',
+                date: new Date(e.date), // Convert from ISO string to Date object
+                title: e.title,
+                time: e.time,
+                priority: e.priority,
+                caseId: e.case_id,
+                caseTitle: e.case_title,
+                clientName: e.client_name
+            }))
 
-            // Create a lookup map
-            const casesMap = new Map()
-            if (casesData) {
-                casesData.forEach((c: any) => {
-                    const clientName = Array.isArray(c.clients) ? c.clients[0]?.full_name : c.clients?.full_name
-                    casesMap.set(c.id, {
-                        subject: c.subject,
-                        case_number: c.case_number,
-                        court_name: c.court_name,
-                        clientName: clientName
-                    })
-                })
-            }
-
-            // B. Fetch Hearings
-            const { data: hearingsData, error: hearingsError } = await supabase
-                .from('hearings')
-                .select('id, hearing_date, hearing_time, case_id')
-                .eq('lawyer_id', lawyerId)
-                .gte('hearing_date', rangeStart.toISOString())
-                .lte('hearing_date', rangeEnd.toISOString())
-
-            if (hearingsError) console.error('Hearings Error:', hearingsError)
-
-            // C. Fetch Tasks
-            const { data: tasksData, error: tasksError } = await supabase
-                .from('tasks')
-                .select('id, title, execution_date, priority, case_id')
-                .eq('lawyer_id', lawyerId)
-                .gte('execution_date', rangeStart.toISOString())
-                .lte('execution_date', rangeEnd.toISOString())
-
-            if (tasksError) console.error('Tasks Error:', tasksError)
-
-            // D. Combine
-            const allEvents: CalendarEvent[] = [
-                ...(hearingsData || []).map(h => {
-                    const caseInfo = h.case_id ? casesMap.get(h.case_id) : null
-
-                    // Format Title: "Session at [Time] for client [Name] - Case [Number] - Court [Name]"
-                    let formattedTitle = 'جلسة'
-                    if (h.hearing_time) formattedTitle += ` الساعة ${h.hearing_time}`
-                    if (caseInfo?.clientName) formattedTitle += ` للعميل ${caseInfo.clientName}`
-                    if (caseInfo?.case_number) formattedTitle += ` - قضية رقم ${caseInfo.case_number}`
-                    if (caseInfo?.court_name) formattedTitle += ` - ${caseInfo.court_name}`
-
-                    if (!caseInfo) formattedTitle = 'جلسة (بدون تفاصيل)';
-
-                    return {
-                        id: h.id,
-                        type: 'hearing' as const,
-                        date: new Date(h.hearing_date),
-                        title: formattedTitle,
-                        time: h.hearing_time,
-                        caseId: h.case_id,
-                        caseTitle: caseInfo?.subject,
-                        clientName: caseInfo?.clientName
-                    }
-                }),
-                ...(tasksData || []).map(t => {
-                    const caseInfo = t.case_id ? casesMap.get(t.case_id) : null
-                    return {
-                        id: t.id,
-                        type: 'task' as const,
-                        date: new Date(t.execution_date),
-                        title: t.title,
-                        priority: t.priority,
-                        caseId: t.case_id,
-                        caseTitle: caseInfo?.subject,
-                        clientName: caseInfo?.clientName
-                    }
-                })
-            ]
             setEvents(allEvents)
 
         } catch (error) {
