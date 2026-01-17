@@ -179,8 +179,7 @@ def require_role(allowed_roles: list):
     
     Args:
         allowed_roles: List of allowed role names
-        
-    Returns:
+        \n    Returns:
         Dependency function
     """
     async def role_checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
@@ -195,12 +194,64 @@ def require_role(allowed_roles: list):
     return role_checker
 
 
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
+) -> Optional[Dict[str, Any]]:
+    """
+    Get current user if authenticated, otherwise return None
+    
+    This allows endpoints to support both authenticated and non-authenticated access.
+    Useful for chat endpoints that should work for both logged-in users and guests.
+    
+    Args:
+        credentials: HTTP Bearer credentials (optional)
+        
+    Returns:
+        User data dict if authenticated, None otherwise
+    """
+    if credentials is None:
+        # No credentials provided - anonymous access
+        logger.info("Anonymous access - no authentication token provided")
+        return None
+    
+    token = credentials.credentials
+    
+    # Decode token
+    payload = decode_token(token)
+    if payload is None:
+        # Invalid token - treat as anonymous
+        logger.warning("Invalid token - treating as anonymous")
+        return None
+    
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        return None
+    
+    # Get user from database
+    user = user_storage.get_user_by_id(user_id)
+    if user is None:
+        logger.warning(f"User {user_id} not found in database")
+        return None
+    
+    # Check if user is active
+    if not user.get("is_active", False):
+        logger.warning(f"User {user_id} account is inactive")
+        return None
+    
+    # Remove sensitive data
+    user.pop("password_hash", None)
+    
+    logger.info(f"Authenticated user: {user.get('full_name')} ({user_id})")
+    return user
+
+
 __all__ = [
     "verify_password",
     "get_password_hash",
     "create_access_token",
     "decode_token",
     "get_current_user",
+    "get_current_user_optional",
     "get_current_active_user",
     "require_role",
     "get_current_user_id"

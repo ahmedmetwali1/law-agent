@@ -21,7 +21,7 @@ from agents.tools.unified_tools import UnifiedToolSystem
 from agents.storage.user_storage import user_storage
 from api.chat_session import session_manager
 from api.ai_helper import router as ai_router
-from api.auth_middleware import get_current_user
+from api.auth_middleware import get_current_user, get_current_user_optional
 
 # Streaming support
 from agents.streaming import StreamManager, EventStreamer
@@ -404,17 +404,30 @@ async def simple_chat(request: SimpleChatRequest):
 
 
 @app.post("/api/chat/start", response_model=ChatResponse)
-async def start_chat_session():
-    """Start a new chat session - no auth required initially"""
+async def start_chat_session(
+    current_user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """
+    Start a new chat session
+    
+    Supports both authenticated and anonymous users:
+    - Authenticated users: Full-featured unlimited sessions
+    - Anonymous users: Limited sessions (max 3 messages) with prompt to login
+    """
     try:
-        # Create session without user context initially
-        # User context will be set when first message is sent
-        session = session_manager.create_session(user_data=None)
-        
-        logger.info(f"📝 New anonymous chat session created: {session.session_id}")
-        
-        # Get greeting message
-        greeting = session.messages[-1]["content"] if session.messages else "مرحباً! سجل دخولك لتتمكن من استخدام الوكيل بالكامل."
+        if current_user:
+            # Authenticated user - full access
+            session = session_manager.create_session(user_data=current_user)
+            logger.info(f"📝 New authenticated chat session: {session.session_id} for user {current_user.get('full_name')}")
+            greeting = session.messages[-1]["content"] if session.messages else f"مرحباً {current_user.get('full_name')}! كيف يمكنني مساعدتك اليوم؟"
+        else:
+            # Anonymous user - limited access
+            session = session_manager.create_session(
+                user_data=None,
+                max_messages=3  # Limit anonymous interactions
+            )
+            logger.info(f"📝 New anonymous chat session: {session.session_id} (limited to 3 messages)")
+            greeting = "مرحباً! يمكنك تجربة الوكيل الذكي (3 رسائل مجانية). سجل دخولك للوصول الكامل."
         
         return ChatResponse(
             session_id=session.session_id,
@@ -431,41 +444,21 @@ async def start_chat_session():
 async def send_chat_message(
     session_id: str, 
     request: ChatRequest,
-    authorization: Optional[str] = Header(None)
+    current_user: Optional[dict] = Depends(get_current_user_optional)
 ):
-    """Send a message to the chat session"""
+    """
+    Send a message to the chat session
+    
+    Supports both authenticated and anonymous users.
+    Sets user context if authenticated and not already set.
+    """
     try:
-        # Get user from token if provided
-        current_user = None
         logger.info(f"📨 Received message for session {session_id}")
-        logger.info(f"🔑 Authorization header: {authorization[:50] if authorization else 'None'}...")
         
-        if authorization:
-            try:
-                from api.auth_middleware import decode_token
-                token = authorization.replace('Bearer ', '')
-                payload = decode_token(token)
-                
-                if payload:
-                    user_id = payload.get("sub")
-                    if user_id:
-                        # Get complete user data from database
-                        user = user_storage.get_user_by_id(user_id)
-                        if user:
-                            # Remove sensitive data
-                            user.pop("password_hash", None)
-                            current_user = user
-                            logger.info(f"✅ Authenticated user: {current_user.get('full_name', 'Unknown')}")
-                        else:
-                            logger.warning(f"⚠️ User {user_id} not found in database")
-                    else:
-                        logger.warning("⚠️ No user ID in token payload")
-                else:
-                    logger.warning("⚠️ Invalid token payload")
-            except Exception as e:
-                logger.warning(f"Invalid token: {e}")
+        if current_user:
+            logger.info(f"✅ Authenticated user: {current_user.get('full_name', 'Unknown')}")
         else:
-            logger.warning("⚠️ No authorization header provided!")
+            logger.info("⚠️ Anonymous user - limited functionality")
         
         session = session_manager.get_session(session_id)
         if not session:
