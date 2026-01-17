@@ -65,12 +65,14 @@ from api.auth import router as auth_router
 from api.clients import router as clients_router
 from api.hearings import router as hearings_router
 from api.routers.documents import router as documents_router
+from api.routers import dashboard as dashboard_router
 
 app.include_router(auth_router, tags=["authentication"])
 app.include_router(clients_router, prefix="/api/clients", tags=["clients"])
 app.include_router(hearings_router, prefix="/api/hearings", tags=["hearings"])
 app.include_router(documents_router, tags=["documents"])  # Already has /api/documents prefix
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
+app.include_router(dashboard_router.router)
 
 from api.routers.support import router as support_router
 app.include_router(support_router, prefix="/api/support", tags=["support"])
