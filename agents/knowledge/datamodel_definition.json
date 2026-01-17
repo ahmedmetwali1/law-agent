@@ -1,0 +1,88 @@
+{
+    "tables": {
+        "cases": {
+            "description": "The central registry for all legal cases managed by the firm.",
+            "description_ar": "السجل المركزي لجميع القضايا القانونية التي تديرها الشركة. يحتوي على التفاصيل الأساسية لكل نزاع.",
+            "columns": {
+                "id": {
+                    "type": "uuid",
+                    "description_ar": "المعرف الفريد للقضية (يتم توليده تلقائياً)",
+                    "required": false,
+                    "generated": true
+                },
+                "case_number": {
+                    "type": "varchar",
+                    "description_ar": "رقم القضية الرسمي في المحكمة",
+                    "user_friendly_name": "رقم القضية",
+                    "required": true,
+                    "missing_message": "للبدء، أحتاج منك تزويدي بـ **رقم القضية** الرسمي (مثلاً: 123/2024)."
+                },
+                "court_name": {
+                    "type": "varchar",
+                    "description_ar": "اسم المحكمة المختصة (مثلاً: محكمة شمال القاهرة)",
+                    "user_friendly_name": "اسم المحكمة",
+                    "required": true,
+                    "missing_message": "في أي **محكمة** يتم نظر هذه الدعوى؟"
+                },
+                "court_circuit": {
+                    "type": "varchar",
+                    "description_ar": "الدائرة القضائية (مثلاً: الدائرة الخامسة عمال)",
+                    "user_friendly_name": "الدائرة",
+                    "required": false
+                },
+                "client_capacity": {
+                    "type": "varchar",
+                    "description_ar": "صفة الموكل في الدعوى (مدعي / مدعى عليه / خصم مدخل)",
+                    "user_friendly_name": "صفة الموكل",
+                    "required": true,
+                    "enum": [
+                        "plaintiff",
+                        "defendant",
+                        "appellant",
+                        "appellee"
+                    ],
+                    "enum_ar": [
+                        "مدعي",
+                        "مدعى عليه",
+                        "مستأنف",
+                        "مستأنف ضده"
+                    ],
+                    "missing_message": "لم توضح لي **صفتك (أو صفة الموكل)** في هذه القضية. هل أنت *المدعي* أم *المدعى عليه*؟ هذا يغير استراتيجية الدفاع بالكامل."
+                },
+                "status": {
+                    "type": "varchar",
+                    "description_ar": "حالة القضية الحالية",
+                    "default": "active",
+                    "required": false
+                },
+                "subject": {
+                    "type": "text",
+                    "description_ar": "موضوع الدعوى وسرد الوقائع",
+                    "user_friendly_name": "موضوع الدعوى",
+                    "required": true,
+                    "missing_message": "أحتاج لتفاصيل أكثر عن **موضوع الدعوى**. ماذا حدث باختصار؟"
+                },
+                "verdict_number": {
+                    "type": "varchar",
+                    "description_ar": "رقم الحكم الصادر (مختلف عن رقم القضية)",
+                    "user_friendly_name": "رقم الحكم",
+                    "required": false,
+                    "context_clue": "يستخدم فقط في حالة وجود حكم سابق أو عند الاستئناف"
+                },
+                "case_year": {
+                    "type": "varchar",
+                    "description_ar": "سنة القضية",
+                    "user_friendly_name": "سنة القضية",
+                    "required": true,
+                    "default_rule": "current_year_if_missing"
+                },
+                "created_at": {
+                    "type": "timestamp",
+                    "description_ar": "تاريخ إنشاء السجل",
+                    "required": false,
+                    "default": "now()"
+                }
+            }
+        }
+    }
+}

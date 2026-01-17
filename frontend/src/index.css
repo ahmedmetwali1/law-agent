@@ -1,0 +1,135 @@
+/* Regal Obsidian - Global Styles with Cairo Font */
+
+/* Import Cairo from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    direction: rtl;
+  }
+
+  body {
+    @apply bg-obsidian-900 text-white;
+    font-variant-ligatures: common-ligatures;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.7;
+    letter-spacing: 0.01em;
+
+    /* Subtle gradient mesh background */
+    background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at bottom right, rgba(212, 175, 55, 0.02) 0%, transparent 50%),
+      #09090b;
+  }
+}
+
+@layer components {
+
+  /* Glassmorphism Utilities */
+  .glass-dark {
+    @apply bg-obsidian-900/70 backdrop-blur-md border border-gold-500/10;
+  }
+
+  .glass-light {
+    @apply bg-obsidian-800/60 backdrop-blur-sm border border-gold-500/15;
+  }
+
+  .glass-card {
+    @apply glass-light rounded-lg transition-all duration-300;
+  }
+
+  .glass-card:hover {
+    @apply -translate-y-1 shadow-lg shadow-gold-500/10;
+  }
+
+  /* Gold Border Accent */
+  .gold-border {
+    @apply border-l-4 border-gold-500;
+  }
+
+  /* Button Styles */
+  .btn-primary {
+    @apply bg-cobalt-600 hover:bg-cobalt-500 text-white px-4 py-2 rounded-lg transition-all duration-200 font-medium;
+  }
+
+  .btn-secondary {
+    @apply bg-obsidian-700 hover:bg-obsidian-600 text-white px-4 py-2 rounded-lg transition-all duration-200;
+  }
+
+  .btn-ghost {
+    @apply hover:bg-obsidian-700 text-gray-400 hover:text-white px-4 py-2 rounded-lg transition-all duration-200;
+  }
+
+  /* Auth Input Styles */
+  .input-modern {
+    @apply w-full bg-obsidian-800 border border-gray-600/30 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:border-cobalt-500 focus:ring-2 focus:ring-cobalt-500/20 outline-none transition-all;
+  }
+
+  /* Skeleton Loader */
+  .skeleton {
+    @apply animate-pulse bg-obsidian-700 rounded;
+  }
+}
+
+@layer utilities {
+
+  /* Custom Scrollbar */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-obsidian-800;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-gold-500/30 rounded-full;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-gold-500/50;
+  }
+
+  /* ✅ تصغير الأحجام العامة بشكل أكبر */
+  .glass-card {
+    @apply p-3;
+    /* بدلاً من p-6 */
+  }
+
+  h1 {
+    @apply text-xl font-semibold;
+    /* أصغر بكثير */
+  }
+
+  h2 {
+    @apply text-lg font-semibold;
+    /* أصغر */
+  }
+
+  h3 {
+    @apply text-base font-medium;
+    /* أصغر */
+  }
+
+  /* تصغير المسافات العامة */
+  .space-y-6> :not([hidden])~ :not([hidden]) {
+    margin-top: 1rem !important;
+    /* بدلاً من 1.5rem */
+  }
+
+  .space-y-4> :not([hidden])~ :not([hidden]) {
+    margin-top: 0.75rem !important;
+    /* بدلاً من 1rem */
+  }
+
+  /* تصغير padding الأزرار */
+  button {
+    @apply text-sm;
+  }
+}
