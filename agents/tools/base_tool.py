@@ -20,6 +20,7 @@ class ToolResult:
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     execution_time_ms: float = 0.0
+    message: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -27,7 +28,8 @@ class ToolResult:
             "data": self.data,
             "error": self.error,
             "metadata": self.metadata,
-            "execution_time_ms": self.execution_time_ms
+            "execution_time_ms": self.execution_time_ms,
+            "message": self.message
         }
 
 
@@ -76,8 +78,21 @@ class BaseTool(ABC):
         self.usage_count += 1
         self.last_used = datetime.now()
     
-    def __repr__(self) -> str:
-        return f"<Tool: {self.name}>"
-
+    def to_langchain_tool(self):
+        """
+        Convert this custom tool to a LangChain StructuredTool.
+        Required for bind_tools() with OpenAI.
+        """
+        from langchain_core.tools import StructuredTool
+        
+        # We need to inspect the 'run' method to get the schema
+        # but LangChain's StructuredTool.from_function does this automatically
+        return StructuredTool.from_function(
+            func=self.run,
+            name=self.name,
+            description=self.description,
+            args_schema=getattr(self, "args_schema", None), # Support explicit schema
+            strict=True # REQUIRED for auto-parsing in stricter LLM environments
+        )
 
 __all__ = ["BaseTool", "ToolResult"]

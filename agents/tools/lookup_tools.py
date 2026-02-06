@@ -5,13 +5,28 @@ Lookup Principle Tool
 
 import time
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Type
+# Use standard pydantic, usually compatible. If issues, try langchain_core.pydantic_v1
+from pydantic import BaseModel, Field
 
 from .base_tool import BaseTool, ToolResult
 from ..config.database import db
 from ..knowledge.embeddings import create_query_embedding
 
+# Explicitly import StructuredTool for the override
+from langchain_core.tools import StructuredTool
+
 logger = logging.getLogger(__name__)
+
+class LookupPrincipleInput(BaseModel):
+    """Input for lookup_principle tool."""
+    query: str = Field(..., description="The search query for the legal principle.")
+    limit: int = Field(5, description="Maximum number of results to return.")
+    principle_type: Optional[str] = Field(None, description="Filter by principle type (e.g. شرعي قطعي).")
+    min_confidence: float = Field(0.5, description="Minimum confidence score.")
+
+    class Config:
+        extra = "forbid"
 
 
 class LookupPrincipleTool(BaseTool):
@@ -28,6 +43,7 @@ class LookupPrincipleTool(BaseTool):
             name="lookup_principle",
             description="البحث عن المبادئ والقواعد القانونية الثابتة"
         )
+        self.args_schema = LookupPrincipleInput # Attach strict schema
         
         # Keywords that indicate principle lookup
         self.principle_keywords = [
@@ -35,6 +51,16 @@ class LookupPrincipleTool(BaseTool):
             "ما حكم", "ما هو الأصل", "البينة", "الضمان"
         ]
     
+    def to_langchain_tool(self) -> StructuredTool:
+        """Override to ensure arguments schema is strictly applied."""
+        return StructuredTool.from_function(
+            func=self.run,
+            name=self.name,
+            description=self.description,
+            args_schema=LookupPrincipleInput, # Explicit binding
+            strict=True # REQUIRED for auto-parsing in stricter LLM environments
+        )
+
     def run(
         self,
         query: str,

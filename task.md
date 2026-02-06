@@ -1,0 +1,21 @@
+# Task List: Intelligent Agent Upgrade v2.1
+
+- [x] **Phase 1: Research & Strategy** <!-- id: 0 -->
+    - [x] Research CoT for Legal AI, Tool Hallucination, and Persona Injection.
+- [ ] **Phase 2: Codebase Analysis** <!-- id: 1 -->
+    - [x] Inspect `judge_prompts.py` & `db_tool_factory.py`.
+    - [ ] Inspect `admin_ops.py` imports.
+    - [ ] Inspect `council.py` imports.
+- [x] **Phase 3: Prompt Library Generation (Execution)** <!-- id: 2 -->
+    - [x] Create/Update `admin_prompts.py` (Planner, Executor, Reporter).
+    - [x] Create/Update `research_prompts.py` (Deep Research).
+    - [x] Create/Update `council_prompts.py` (Council Personas).
+    - [x] Update `judge_prompts.py` (Orchestrator).
+- [x] **Phase 5: Tooling Audit & Risk Assessment** <!-- id: 4 -->
+    - [x] Inventory all tools in `agents/tools/`.
+    - [x] Analyze `db_tool_factory.py` (Security & Validation).
+- [x] **Phase 6: Admin Tooling Enhancement (User Feedback)** <!-- id: 5 -->
+    - [x] Analyze `migrations/db.md` vs `schema_registry.py`.
+    - [x] Fix "Today's Date" issue (Inject `current_date` into Admin Planner).
+    - [x] Enrich Tool Docstrings in `db_tool_factory.py` (Field descriptions, Enums).
+    - [x] Verify coverage of all operational tables.

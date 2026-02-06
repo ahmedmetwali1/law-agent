@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Search, Bell, User, Settings, LogOut } from 'lucide-react'
+import { Search, Bell, User, Settings, LogOut, Menu } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { useNotificationStore } from '../../stores/notificationStore'
@@ -8,7 +8,11 @@ import { globalSearch, SearchResult } from '../../services/searchService'
 import { formatDistanceToNow } from 'date-fns'
 import { arSA } from 'date-fns/locale'
 
-export function GlobalHeader() {
+interface GlobalHeaderProps {
+    onMenuClick?: () => void
+}
+
+export function GlobalHeader({ onMenuClick }: GlobalHeaderProps) {
     const location = useLocation()
     const navigate = useNavigate()
     const { profile, signOut, isAssistant, officeId, getEffectiveLawyerId } = useAuth()
@@ -19,6 +23,7 @@ export function GlobalHeader() {
     const [isSearching, setIsSearching] = useState(false)
     const [showUserMenu, setShowUserMenu] = useState(false)
     const [showNotifications, setShowNotifications] = useState(false)
+    const [showMobileSearch, setShowMobileSearch] = useState(false) // ✅ Mobile Search State
     const [officeLawyer, setOfficeLawyer] = useState<any>(null)
     const menuRef = useRef<HTMLDivElement>(null)
     const notifRef = useRef<HTMLDivElement>(null)
@@ -35,6 +40,8 @@ export function GlobalHeader() {
             }
             if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
                 setShowSearchResults(false)
+                // Don't close mobile search immediately if clicking inside, but if outside yes
+                if (window.innerWidth < 1024) setShowMobileSearch(false)
             }
         }
 
@@ -63,30 +70,35 @@ export function GlobalHeader() {
         return () => clearTimeout(timer)
     }, [searchQuery, getEffectiveLawyerId])
 
-    // ✅ NEW: جلب بيانات المحامي للمساعد
+    // ✅ BFF Pattern: جلب بيانات المحامي للمساعد
     useEffect(() => {
         const fetchOfficeLawyer = async () => {
             if (isAssistant && officeId) {
-                const { supabase } = await import('../../supabaseClient')
-                const { data } = await supabase
-                    .from('users')
-                    .select('full_name')
-                    .eq('id', officeId)
-                    .single()
-
-                if (data) setOfficeLawyer(data)
+                try {
+                    const { apiClient } = await import('../../api/client')
+                    const data = await apiClient.get('/api/users/office-lawyer')
+                    if (data) setOfficeLawyer(data)
+                } catch (error) {
+                    console.error('Error fetching office lawyer:', error)
+                }
             }
         }
         fetchOfficeLawyer()
     }, [isAssistant, officeId])
 
-    // Fetch notifications on mount
+    // Fetch notifications on mount and when lawyerId changes
     useEffect(() => {
-        // TODO: Uncomment when hearings and tasks tables are created
-        // const lawyerId = getEffectiveLawyerId()
-        // if (lawyerId) {
-        //     fetchNotifications(lawyerId)
-        // }
+        const lawyerId = getEffectiveLawyerId()
+        if (lawyerId) {
+            fetchNotifications(lawyerId)
+        }
+
+        // Refresh every 5 minutes
+        const interval = setInterval(() => {
+            if (lawyerId) fetchNotifications(lawyerId)
+        }, 5 * 60 * 1000)
+
+        return () => clearInterval(interval)
     }, [getEffectiveLawyerId, fetchNotifications])
 
     // Generate breadcrumbs from current path
@@ -138,45 +150,75 @@ export function GlobalHeader() {
     return (
         <header className="fixed top-0 left-0 right-0 z-50 h-16 glass-dark border-b border-gold-500/10">
             <div className="flex items-center justify-between h-full px-6">
-                {/* Right Side - Breadcrumbs */}
-                <nav className="flex items-center gap-2 text-sm">
-                    {breadcrumbs.map((crumb, index) => (
-                        <div key={crumb.path} className="flex items-center gap-2">
-                            <a
-                                href={crumb.path}
-                                className={`
-                  transition-colors
-                  ${index === breadcrumbs.length - 1
-                                        ? 'text-white font-medium'
-                                        : 'text-gray-400 hover:text-gray-300'
-                                    }
-                `}
-                            >
-                                {crumb.label}
-                            </a>
-                            {index < breadcrumbs.length - 1 && (
-                                <span className="text-gray-600">/</span>
-                            )}
-                        </div>
-                    ))}
-                </nav>
+
+                {/* Right Side - Breadcrumbs & Menu */}
+                <div className="flex items-center gap-4">
+                    {/* Mobile Menu Button */}
+                    <button
+                        onClick={onMenuClick}
+                        className="lg:hidden p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+                    >
+                        <Menu className="w-6 h-6" />
+                    </button>
+
+                    <nav className="flex items-center gap-2 text-sm">
+                        {breadcrumbs.map((crumb, index) => (
+                            <div key={crumb.path} className="flex items-center gap-2">
+                                <a
+                                    href={crumb.path}
+                                    className={`
+                                        transition-colors
+                                        ${index === breadcrumbs.length - 1
+                                            ? 'text-white font-medium'
+                                            : 'text-gray-400 hover:text-gray-300'
+                                        }
+                                    `}
+                                >
+                                    {crumb.label}
+                                </a>
+                                {index < breadcrumbs.length - 1 && (
+                                    <span className="text-gray-600">/</span>
+                                )}
+                            </div>
+                        ))}
+                    </nav>
+                </div>
 
                 {/* Left Side - Actions */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 lg:gap-4">
                     {/* Global Search */}
                     <div className="relative" ref={searchRef}>
-                        <div className="flex items-center gap-2 bg-obsidian-800 rounded-lg px-4 py-2 border border-gray-600/20 focus-within:border-cobalt-500/50 transition-colors w-64">
-                            <Search className="w-4 h-4 text-gray-400" />
+                        {/* Mobile Search Icon Toggle */}
+                        {!showMobileSearch && (
+                            <button
+                                onClick={() => setShowMobileSearch(true)}
+                                className="lg:hidden p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+                            >
+                                <Search className="w-5 h-5" />
+                            </button>
+                        )}
+
+                        {/* Search Input - Hidden on Mobile unless toggled */}
+                        <div className={`
+                            flex items-center gap-2 bg-obsidian-800 rounded-lg px-4 py-2 border border-gray-600/20 
+                            focus-within:border-cobalt-500/50 transition-all duration-300
+                            ${showMobileSearch
+                                ? 'absolute -right-10 top-0 w-[calc(100vw-8rem)] z-50 shadow-2xl scale-100 opacity-100 origin-right'
+                                : 'hidden lg:flex w-64 scale-100'
+                            }
+                        `}>
+                            <Search className="w-4 h-4 text-gray-400 shrink-0" />
                             <input
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="بحث في الموكلين والقضايا..."
-                                className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-500"
+                                placeholder="بحث..."
+                                autoFocus={showMobileSearch}
+                                className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-500 min-w-0"
                                 style={{ fontFamily: 'Cairo, sans-serif' }}
                             />
                             {isSearching && (
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gold-500"></div>
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gold-500 shrink-0"></div>
                             )}
                         </div>
 
@@ -317,7 +359,7 @@ export function GlobalHeader() {
                             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cobalt-500 to-cobalt-600 flex items-center justify-center ring-2 ring-gold-500/30">
                                 <User className="w-4 h-4 text-white" />
                             </div>
-                            <div className="flex flex-col items-start">
+                            <div className="hidden lg:flex flex-col items-start">
                                 <span className="text-sm text-white group-hover:text-gold-500 transition font-medium" style={{ fontFamily: 'Cairo, sans-serif' }}>
                                     {isAssistant ? 'المساعد' : 'المحامي'} {profile?.full_name || ''}
                                 </span>
@@ -332,7 +374,21 @@ export function GlobalHeader() {
 
                         {/* User Dropdown Menu */}
                         {showUserMenu && (
-                            <div className="absolute left-0 mt-2 w-48 glass-dark border border-gold-500/20 rounded-lg shadow-xl overflow-hidden">
+                            <div className="absolute left-0 mt-2 w-64 glass-dark border border-gold-500/20 rounded-lg shadow-xl overflow-hidden">
+                                {/* Mobile Only: User Details Header inside Menu */}
+                                <div className="lg:hidden p-4 border-b border-gold-500/10 bg-obsidian-800/50">
+                                    <div className="flex flex-col items-start">
+                                        <span className="text-sm font-bold text-white mb-1" style={{ fontFamily: 'Cairo, sans-serif' }}>
+                                            {isAssistant ? 'المساعد' : 'المحامي'} {profile?.full_name || ''}
+                                        </span>
+                                        {isAssistant && officeLawyer && (
+                                            <span className="text-xs text-gray-400" style={{ fontFamily: 'Cairo, sans-serif' }}>
+                                                مساعد لـ: {officeLawyer.full_name}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+
                                 <button
                                     onClick={() => {
                                         navigate('/settings')

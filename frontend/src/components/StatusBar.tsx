@@ -1,6 +1,7 @@
 import React from 'react';
 import { Brain, Zap, Scale, Calendar, Activity, LogOut, User } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 interface StatusBarProps {
     memoryItems?: number;
@@ -19,7 +20,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     temporalActive = true,
     thinkingSpeed = 'slow'
 }) => {
-    const { user, logout } = useAuth();
+    const { user, signOut } = useAuth();
+    const navigate = useNavigate();
+
+    const handleLogout = async () => {
+        await signOut();
+        navigate('/login');
+    };
     const memoryPercentage = (memoryItems / memoryCapacity) * 100;
 
     return (
@@ -90,7 +97,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                         {user?.full_name || user?.email}
                     </span>
                     <button
-                        onClick={logout}
+                        onClick={handleLogout}
                         className="p-1 hover:bg-destructive/10 rounded transition-colors"
                         title="تسجيل الخروج"
                     >

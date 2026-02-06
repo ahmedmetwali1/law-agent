@@ -5,8 +5,9 @@ import {
     Search, Filter, ChevronLeft, ChevronRight,
     Shield, CheckCircle2, AlertCircle
 } from 'lucide-react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { useBreadcrumb } from '../contexts/BreadcrumbContext'
 import { toast } from 'sonner'
 import { format, isSameDay, addMonths, subMonths, startOfMonth, endOfMonth } from 'date-fns'
 import { ar } from 'date-fns/locale'
@@ -18,29 +19,36 @@ interface Hearing {
     court_room: string
     notes: string
     judge_name: string
-    cases: {
+    cases?: {
         id: string
         case_number: string
         court_name: string
-        clients: {
+        clients?: {
             full_name: string
         }
     }
+    // ✅ New denormalized fields
+    client_name?: string
+    case_number?: string
+    case_year?: string
+    court_name?: string
 }
 
 export default function HearingsPage() {
     const { getEffectiveLawyerId } = useAuth()
+    const { setPageTitle } = useBreadcrumb()
     const [hearings, setHearings] = useState<Hearing[]>([])
     const [loading, setLoading] = useState(true)
     const [currentDate, setCurrentDate] = useState(new Date())
     const [viewMode, setViewMode] = useState<'list' | 'timeline'>('timeline')
 
     useEffect(() => {
+        setPageTitle('الجلسات')
         const lawyerId = getEffectiveLawyerId()
         if (lawyerId) {
             fetchHearings()
         }
-    }, [currentDate, getEffectiveLawyerId])
+    }, [currentDate, getEffectiveLawyerId, setPageTitle])
 
     const fetchHearings = async () => {
         const lawyerId = getEffectiveLawyerId()
@@ -48,30 +56,20 @@ export default function HearingsPage() {
 
         try {
             setLoading(true)
-            const start = startOfMonth(currentDate).toISOString()
-            const end = endOfMonth(currentDate).toISOString()
+            const start = format(startOfMonth(currentDate), 'yyyy-MM-dd')
+            const end = format(endOfMonth(currentDate), 'yyyy-MM-dd')
 
             // Fetch hearings with case & client details - FILTERED BY LAWYER_ID
-            const { data, error } = await supabase
-                .from('hearings')
-                .select(`
-                    *,
-                    cases (
-                        id,
-                        case_number,
-                        court_name,
-                        clients (
-                            full_name
-                        )
-                    )
-                `)
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .gte('hearing_date', start)
-                .lte('hearing_date', end)
-                .order('hearing_date', { ascending: true })
+            // Fetch hearings from Backend API
+            const response = await apiClient.get(`/api/hearings/range?start_date=${start}&end_date=${end}`)
 
-            if (error) throw error
-            setHearings(data || [])
+            if (response.success && response.hearings) {
+                setHearings(response.hearings)
+            } else {
+                setHearings([])
+            }
+
+            // setHearings(data || []) <-- Removed
         } catch (error) {
             console.error('Error fetching hearings:', error)
             toast.error('فشل تحميل الجلسات')
@@ -199,7 +197,7 @@ export default function HearingsPage() {
                                                                 <span className="font-bold font-mono">{hearing.hearing_time}</span>
                                                             </div>
                                                             <h3 className="text-xl font-bold text-white mb-1" style={{ fontFamily: 'Cairo, sans-serif' }}>
-                                                                جلسة {hearing.cases.case_number}
+                                                                جلسة {hearing.case_number || hearing.cases?.case_number || 'غير معروف'}
                                                             </h3>
                                                         </div>
                                                         <div className="p-2 bg-obsidian-900 rounded-lg text-gold-500">
@@ -212,7 +210,7 @@ export default function HearingsPage() {
                                                             <p className="text-gray-500 text-xs mb-1">المحكمة</p>
                                                             <p className="text-gray-300 flex items-center gap-1">
                                                                 <MapPin className="w-3 h-3 text-gold-500/70" />
-                                                                {hearing.cases.court_name}
+                                                                {hearing.court_name || hearing.cases?.court_name || '-'}
                                                             </p>
                                                         </div>
                                                         <div>
@@ -223,7 +221,7 @@ export default function HearingsPage() {
                                                             <p className="text-gray-500 text-xs mb-1">الموكل</p>
                                                             <p className="text-gray-300 flex items-center gap-1">
                                                                 <User className="w-3 h-3 text-gold-500/70" />
-                                                                {hearing.cases.clients.full_name}
+                                                                {hearing.client_name || hearing.cases?.clients?.full_name || '-'}
                                                             </p>
                                                         </div>
                                                     </div>

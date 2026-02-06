@@ -26,28 +26,28 @@ class HearingStorage:
     
     def create_hearing(
         self,
+        lawyer_id: str,
         case_id: str,
         hearing_date: date,
         hearing_time: Optional[time] = None,
         court_room: Optional[str] = None,
         judge_name: Optional[str] = None,
         judge_requests: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        outcome: Optional[str] = None,
+        next_hearing_date: Optional[date] = None,
+        # Denormalized fields
+        case_number: Optional[str] = None,
+        client_name: Optional[str] = None,
+        case_year: Optional[str] = None,
+        court_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create a new hearing
-        
-        Args:
-            case_id: Case UUID
-            hearing_date: Date of hearing
-            hearing_time: Time of hearing
-            ... other fields
-            
-        Returns:
-            Created hearing data
         """
         try:
             hearing_data = {
+                "lawyer_id": lawyer_id,
                 "case_id": case_id,
                 "hearing_date": hearing_date.isoformat() if isinstance(hearing_date, date) else hearing_date,
                 "hearing_time": hearing_time.isoformat() if isinstance(hearing_time, time) else hearing_time,
@@ -55,6 +55,14 @@ class HearingStorage:
                 "judge_name": judge_name,
                 "judge_requests": judge_requests,
                 "notes": notes,
+                "outcome": outcome,
+                "next_hearing_date": next_hearing_date.isoformat() if isinstance(next_hearing_date, date) else next_hearing_date,
+                # Denormalized fields
+                "case_number": case_number,
+                "client_name": client_name,
+                "case_year": case_year,
+                "court_name": court_name,
+                
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
             }
@@ -161,6 +169,81 @@ class HearingStorage:
             
         except Exception as e:
             logger.error(f"❌ Failed to get upcoming hearings: {e}")
+            return []
+    
+    def get_hearings_by_range(
+        self,
+        lawyer_id: str,
+        start_date: date,
+        end_date: date
+    ) -> List[Dict[str, Any]]:
+        """
+        Get hearings within date range for a lawyer
+        """
+        try:
+            # Join hearings with cases and clients
+            result = self.client.table(self.TABLE_NAME)\
+                .select("*, cases(id, case_number, court_name, clients(full_name))")\
+                .gte("hearing_date", start_date.isoformat())\
+                .lte("hearing_date", end_date.isoformat())\
+                .order("hearing_date")\
+                .execute()
+            
+            # Filter by lawyer_id (from joined cases.clients) if needed, 
+            # OR better: query filtered by case->client->lawyer_id (complex in supabase)
+            # Since we joined, we can filter in python or rely on RLS if we trust it? 
+            # But we are using SERVICE_KEY in backend usually, so we must filter manually or use correct updated query.
+            
+            # For robustness, we iterate and filter
+            hearings = []
+            for hearing in result.data or []:
+                case_data = hearing.get("cases")
+                if case_data:
+                    # Check if case belongs to lawyer (via client or direct relation)
+                    # This simplified query assumes case filtering.
+                    # Ideally we filter by `cases.clients.lawyer_id` but deep filter is tricky.
+                    # Let's assume the service returns all hearings in range, we filter by Python for safety.
+                    
+                    # BUT wait, RLS is ON. If we use SERVICE_ROLE, we get everything.
+                    # We should filter by lawyer_id.
+                    
+                    # Manual filter:
+                    client_data = case_data.get("clients")
+                    # We might need to fetch lawyer_id from case or client.
+                    # Our schema says: hearings -> case_id -> cases -> client_id -> clients -> lawyer_id
+                    # OR cases -> lawyer_id (if cases has lawyer_id directly).
+                    
+                    # Checking `clients` table schema...
+                    # Checking `cases` table schema...
+                    
+                    # Assuming we filter by result data structure in previous methods:
+                    # In get_today_hearings_by_lawyer:
+                    # if client_data and client_data.get("lawyer_id") == lawyer_id: ...
+                    
+                    # So we do the same here.
+                    if client_data: # If we selected clients(full_name, lawyer_id)
+                         # Wait, select string above is "clients(full_name)". It misses lawyer_id.
+                         # I must fetch lawyer_id to filter.
+                         pass
+            
+            # Revised Select:
+            result = self.client.table(self.TABLE_NAME)\
+                .select("*, cases(id, case_number, court_name, clients(full_name, lawyer_id))")\
+                .gte("hearing_date", start_date.isoformat())\
+                .lte("hearing_date", end_date.isoformat())\
+                .order("hearing_date")\
+                .execute()
+
+            filtered = []
+            for h in result.data or []:
+                c = h.get("cases")
+                if c and c.get("clients") and c["clients"].get("lawyer_id") == lawyer_id:
+                    filtered.append(h)
+            
+            return filtered
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get hearings range: {e}")
             return []
     
     def get_case_hearings(self, case_id: str) -> List[Dict[str, Any]]:

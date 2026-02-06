@@ -94,22 +94,30 @@ class UserStorage:
     
     def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get user by ID
+        Get user by ID with role information
         
         Args:
             user_id: User UUID
             
         Returns:
-            User data or None
+            User data with role or None
         """
         try:
+            # ✅ Include role relation for authentication checks
             result = self.client.table(self.TABLE_NAME)\
-                .select("*")\
+                .select("*, role:roles(id, name, name_ar, permissions)")\
                 .eq("id", user_id)\
                 .single()\
                 .execute()
             
-            return result.data if result.data else None
+            if result.data:
+                # Flatten role for easier access
+                user = result.data
+                if user.get('role') and isinstance(user['role'], dict):
+                    # Add role name directly to user dict for easier access
+                    user['role_name'] = user['role'].get('name')
+                return user
+            return None
             
         except Exception as e:
             logger.debug(f"User not found: {user_id}")

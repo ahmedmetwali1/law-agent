@@ -3,13 +3,21 @@ Clients API Router
 روابط API لإدارة الموكلين
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List, Dict, Any
 import logging
 
 from api.auth_middleware import get_current_user
+from api.guards import verify_subscription_active
+from api.database import get_supabase_client
 from agents.storage.client_storage import client_storage
+
+def get_effective_lawyer_id(user: Dict[str, Any]) -> str:
+    """Helper to get lawyer ID"""
+    if user.get('role') == 'assistant':
+        return user.get('office_id', user['id'])
+    return user['id']
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +54,11 @@ class UpdateClientRequest(BaseModel):
 
 # ===== API Endpoints =====
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_client(
     request: CreateClientRequest,
-    current_user: Dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user),
+    _: Dict = Depends(verify_subscription_active)
 ):
     """
     إنشاء موكل جديد
@@ -83,34 +92,50 @@ async def create_client(
         )
 
 
-@router.get("/")
-async def list_clients(
-    current_user: Dict = Depends(get_current_user),
-    limit: int = 100
-):
+@router.get("")
+async def get_clients(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search term for name, phone, email, or national ID"),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
     """
-    عرض جميع الموكلين للمحامي
+    Get paginated clients with search support.
+    """
+    lawyer_id = get_effective_lawyer_id(current_user)
+
+    # Calculate offset
+    start = (page - 1) * limit
+    end = start + limit - 1
     
-    Query params:
-        - limit: maximum results (default: 100)
-    """
     try:
-        clients = client_storage.get_clients_by_lawyer(
-            lawyer_id=current_user["id"],
-            limit=limit
-        )
+        supabase = get_supabase_client()
+        
+        # Build query
+        query = supabase.table('clients').select('*', count='exact').eq('lawyer_id', lawyer_id).order('created_at', desc=True)
+        
+        # Search
+        if search:
+            # Search across multiple columns using OR logic: name, phone, email, national_id
+            search_filter = f"full_name.ilike.%{search}%,phone.ilike.%{search}%,email.ilike.%{search}%,national_id.ilike.%{search}%"
+            query = query.or_(search_filter)
+            
+        # Pagination
+        query = query.range(start, end)
+        
+        result = query.execute()
         
         return {
             "success": True,
-            "count": len(clients),
-            "clients": clients
+            "data": result.data or [],
+            "total": result.count or 0,
+            "page": page,
+            "limit": limit
         }
+        
     except Exception as e:
-        logger.error(f"Failed to list clients: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+        logger.error(f"❌ Failed to fetch clients: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/search")
@@ -194,7 +219,8 @@ async def get_client(
 async def update_client(
     client_id: str,
     request: UpdateClientRequest,
-    current_user: Dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user),
+    _: Dict = Depends(verify_subscription_active)
 ):
     """
     تعديل بيانات موكل
@@ -239,7 +265,8 @@ async def update_client(
 @router.delete("/{client_id}")
 async def delete_client(
     client_id: str,
-    current_user: Dict = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_user),
+    _: Dict = Depends(verify_subscription_active)
 ):
     """
     حذف موكل

@@ -1,0 +1,5 @@
+
+# AI Agent Framework
+langgraph>=0.0.10
+langchain-openai
+langchain-anthropic

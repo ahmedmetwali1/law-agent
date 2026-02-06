@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-// import { supabase } from '../supabaseClient' // ✅ Replaced with API client
 import { apiClient } from '../api/client'
 import { HighDensityStatCard } from '../components/dashboard/HighDensityStatCard'
 import { CalendarWidget, CalendarEvent } from '../components/dashboard/CalendarWidget'

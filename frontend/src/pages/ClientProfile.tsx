@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowRight, Plus, Phone, Mail, MapPin, Scale, Briefcase, Calendar, FileText, Edit } from 'lucide-react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useBreadcrumb } from '../contexts/BreadcrumbContext'
 import { toast } from 'sonner'
@@ -76,27 +76,33 @@ export function ClientProfile() {
         try {
             setLoading(true)
 
-            // Fetch client
-            const { data: clientData, error: clientError } = await supabase
-                .from('clients')
-                .select('*')
-                .eq('id', id)
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .single()
+            // Fetch client details with cases from Backend API
+            const response = await apiClient.get(`/api/clients/${id}?include_cases=true`)
 
-            if (clientError) throw clientError
-            setClient(clientData)
+            if (response.success && response.client) {
+                const clientData = response.client
+                setClient(clientData)
+                // CaseStorage returns cases within client object if include_cases=true
+                // But typically it joins them. Let's check api/clients.py implementation.
+                // It calls client_storage.get_client_with_cases.
+                // Which typically returns client dict with "cases": [...] list.
+                // But my CaseStorage.get_cases_by_client returns list of cases.
+                // client_storage.get_client_with_cases uses Supabase select('*, cases(*)').
+                // So clientData.cases should be the array.
 
-            // Fetch cases
-            const { data: casesData, error: casesError } = await supabase
-                .from('cases')
-                .select('*')
-                .eq('client_id', id)
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .order('created_at', { ascending: false })
-
-            if (casesError) throw casesError
-            setCases(casesData || [])
+                if (clientData.cases && Array.isArray(clientData.cases)) {
+                    setCases(clientData.cases)
+                } else {
+                    // Fallback: fetch cases separately if not included (security/robustness)
+                    // But we want to use the API we just built.
+                    // api/cases?client_id=... is not implemented yet in list_cases.
+                    // The new Cases API lists ALL cases for lawyer.
+                    // So we filter locally? No, that's inefficient.
+                    // Ideally api/clients/{id} SHOULD return cases.
+                    // I verified api/clients.py HAS include_cases support. 
+                    setCases(clientData.cases || [])
+                }
+            }
         } catch (error: any) {
             console.error('Error fetching data:', error)
             toast.error('فشل تحميل البيانات')
@@ -389,33 +395,33 @@ function CreateCaseModal({ clientId, clientName, onClose, onSuccess }: CreateCas
         setLoading(true)
 
         try {
-            const { error } = await supabase
-                .from('cases')
-                .insert({
-                    client_id: clientId,
-                    lawyer_id: getEffectiveLawyerId(),  // ✅ يُسجل للمحامي
-                    case_number: formData.case_number,
-                    court_name: formData.court_name || null,
-                    court_circuit: formData.court_circuit || null,
-                    case_type: formData.case_type || null,
-                    subject: formData.subject || null,
-                    status: formData.status,
-                    summary: formData.summary || null,
-                    case_year: formData.case_year || null,
-                    case_date: formData.case_date || null,
-                    client_capacity: formData.client_capacity || null,
-                    verdict_number: formData.verdict_number || null,
-                    verdict_year: formData.verdict_year || null,
-                    verdict_date: formData.verdict_date || null
-                })
+            // Use Backend API to create case
+            const payload = {
+                client_id: clientId,
+                case_number: formData.case_number,
+                court_name: formData.court_name || null,
+                court_circuit: formData.court_circuit || null,
+                case_type: formData.case_type || null,
+                subject: formData.subject || null,
+                status: formData.status,
+                summary: formData.summary || null,
+                case_year: formData.case_year || null,
+                case_date: formData.case_date || null,
+                client_capacity: formData.client_capacity || null,
+                verdict_number: formData.verdict_number || null,
+                verdict_year: formData.verdict_year || null,
+                verdict_date: formData.verdict_date || null
+            }
 
-            if (error) throw error
+            const response = await apiClient.post('/api/cases', payload)
 
-            toast.success('تمت إضافة القضية بنجاح')
-            onSuccess()
+            if (response.success) {
+                toast.success('تمت إضافة القضية بنجاح')
+                onSuccess()
+            }
         } catch (error: any) {
             console.error('Error creating case:', error)
-            toast.error('فشل إضافة القضية: ' + error.message)
+            toast.error('فشل إضافة القضية')
         } finally {
             setLoading(false)
         }

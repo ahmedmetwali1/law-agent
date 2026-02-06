@@ -3,6 +3,7 @@ Documents API Router
 API للتعامل مع المستندات، الرفع، OCR، والتلخيص
 """
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from api.guards import verify_subscription_active
 from fastapi.responses import JSONResponse
 from typing import Optional
 import os
@@ -44,7 +45,8 @@ async def upload_document(
     client_id: str = Form(None),
     lawyer_id: str = Form(None),
     document_type: str = Form("other"),
-    enable_ocr: bool = Form(False)
+    enable_ocr: bool = Form(False),
+    _: bool = Depends(verify_subscription_active)
 ):
     """
     Upload a document and optionally enable OCR extraction
@@ -58,6 +60,9 @@ async def upload_document(
         enable_ocr: Whether to enable OCR extraction
     """
     try:
+        # 0. Subscription and Storage Governance Check
+        await check_storage_limit(lawyer_id, file.size if hasattr(file, 'size') else 0)
+
         # Validate file type
         allowed_extensions = ['pdf', 'png', 'jpg', 'jpeg']
         file_extension = file.filename.split('.')[-1].lower()
@@ -117,6 +122,15 @@ async def upload_document(
         
         logger.info(f"Document inserted successfully: {result.data[0]['id']}")
         
+        # Update Storage Usage in Lawyer Subscriptions
+        try:
+            supabase.rpc("increment_storage_usage", {
+                "lawyer_id_val": lawyer_id, 
+                "size_mb": file_size / (1024 * 1024)
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to update storage stats: {e}")
+
         # If OCR is enabled, trigger extraction
         if enable_ocr:
             # Call OCR endpoint asynchronously (in background)
@@ -140,7 +154,7 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"فشل رفع المستند: {str(e)}")
 
 
-@router.post("/{document_id}/extract")
+@router.post("/{document_id}/extract", dependencies=[Depends(verify_subscription_active)])
 async def extract_text(document_id: str):
     """
     Extract text from document using OCR
@@ -210,7 +224,7 @@ async def extract_text(document_id: str):
         raise HTTPException(status_code=500, detail=f"فشل استخراج النص: {str(e)}")
 
 
-@router.post("/{document_id}/summarize")
+@router.post("/{document_id}/summarize", dependencies=[Depends(verify_subscription_active)])
 async def summarize_document(document_id: str):
     """
     Summarize document using LLM
@@ -351,7 +365,7 @@ async def get_case_documents(case_id: str):
         raise HTTPException(status_code=500, detail=f"فشل جلب المستندات: {str(e)}")
 
 
-@router.delete("/{document_id}")
+@router.delete("/{document_id}", dependencies=[Depends(verify_subscription_active)])
 async def delete_document(document_id: str):
     """
     Delete a document
@@ -376,6 +390,15 @@ async def delete_document(document_id: str):
         # Delete from database
         supabase.table("documents").delete().eq("id", document_id).execute()
         
+        # Decrease Storage Usage
+        try:
+            supabase.rpc("increment_storage_usage", {
+                "lawyer_id_val": document["lawyer_id"], 
+                "size_mb": -(document.get("file_size", 0) / (1024 * 1024))
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to decrease storage stats: {e}")
+
         return JSONResponse(content={
             "success": True,
             "message": "تم حذف المستند بنجاح"

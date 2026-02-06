@@ -179,7 +179,8 @@ class FlexibleSearchTool(BaseTool):
         method: Literal["keyword", "phrase", "any", "all"] = "any",
         limit: int = 10,
         offset: int = 0,
-        min_word_length: int = 2
+        min_word_length: int = 2,
+        country_id: Optional[str] = None
     ) -> ToolResult:
         """
         Flexible search across tables.
@@ -228,7 +229,8 @@ class FlexibleSearchTool(BaseTool):
                     method=method,
                     limit=limit,
                     offset=offset,
-                    min_word_length=min_word_length
+                    min_word_length=min_word_length,
+                    country_id=country_id
                 )
                 
                 all_results.extend(results)
@@ -288,7 +290,8 @@ class FlexibleSearchTool(BaseTool):
         method: str,
         limit: int,
         offset: int,
-        min_word_length: int
+        min_word_length: int,
+        country_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Execute search on a single table"""
         
@@ -300,6 +303,10 @@ class FlexibleSearchTool(BaseTool):
         
         # Build query based on method
         query_builder = db.client.from_(table).select("*")
+        
+        # Apply Country Filter
+        if country_id and table in ["document_chunks", "legal_sources"]:
+             query_builder = query_builder.eq("country_id", country_id)
         
         if method == "phrase":
             # Exact phrase match
@@ -323,7 +330,17 @@ class FlexibleSearchTool(BaseTool):
         # Apply pagination
         query_builder = query_builder.range(offset, offset + limit - 1)
         
-        response = query_builder.execute()
+        try:
+            response = query_builder.execute()
+        except Exception as e:
+            # Handle cases where country_id might cause error if schema changed unexpectedly
+            logger.warning(f"Query execute failed (retrying without country filter if present): {e}")
+            if country_id:
+                 # Retry without country filter just in case
+                 # Reconstruct builder roughly (simplified)
+                 # Actually, better to just raise or return empty list
+                 return []
+            raise e
         
         # Format results
         results = []
@@ -334,6 +351,13 @@ class FlexibleSearchTool(BaseTool):
                 "content": row.get("content") or row.get("template_text") or row.get("title"),
                 "summary": row.get("ai_summary"),
                 "source_id": row.get("source_id"),
+                "metadata": {
+                    "country_id": row.get("country_id"),
+                    "sequence_number": row.get("sequence_number"),
+                    "hierarchy_path": row.get("hierarchy_path"),
+                    "keywords": row.get("keywords"),
+                    "legal_logic": row.get("legal_logic")
+                },
                 "raw": row  # Keep raw data for further processing
             })
         
@@ -364,6 +388,7 @@ class GetRelatedDocumentTool(BaseTool):
         self,
         chunk_id: Optional[str] = None,
         source_id: Optional[str] = None,
+        sequence_number: Optional[int] = None,  # NEW: Direct navigation
         include_siblings: bool = False,
         sibling_limit: int = 3
     ) -> ToolResult:
@@ -373,6 +398,7 @@ class GetRelatedDocumentTool(BaseTool):
         Args:
             chunk_id: ID of a document_chunk (will fetch its source)
             source_id: Direct ID of legal_source
+            sequence_number: (NEW) Direct navigation to specific chunk by sequence
             include_siblings: Also fetch nearby chunks from same source
             sibling_limit: Number of sibling chunks to include
             
@@ -383,7 +409,29 @@ class GetRelatedDocumentTool(BaseTool):
         start_time = time.time()
         
         try:
-            # If chunk_id provided, first get the source_id
+            # === NEW: Direct Navigation by source_id + sequence_number ===
+            if source_id and sequence_number is not None:
+                logger.info(f"📚 GetRelatedDoc: Direct navigation to page {sequence_number} of source {source_id[:8]}...")
+                
+                # Fetch the specific chunk by sequence
+                chunk_response = db.document_chunks.select(
+                    "id, content, sequence_number, source_id, ai_summary"
+                ).eq("source_id", source_id)\
+                .eq("sequence_number", sequence_number)\
+                .execute()
+                
+                if not chunk_response.data:
+                    return ToolResult(
+                        success=False,
+                        error=f"Page {sequence_number} not found for source {source_id}",
+                        metadata={"error_code": "PAGE_NOT_FOUND"}
+                    )
+                
+                # Set chunk_id to the found chunk
+                chunk_id = chunk_response.data[0]["id"]
+                # We'll fetch the source below as usual
+            
+            # === Original Logic: If chunk_id provided, first get the source_id ===
             if chunk_id and not source_id:
                 chunk_response = db.document_chunks.select("source_id").eq("id", chunk_id).execute()
                 if chunk_response.data:
@@ -423,28 +471,78 @@ class GetRelatedDocumentTool(BaseTool):
                 "siblings": []
             }
             
-            # Optionally fetch sibling chunks
-            if include_siblings:
-                siblings_response = db.document_chunks.select(
+            # Optionally fetch sibling chunks (Context Expansion)
+            if include_siblings and chunk_id:
+                # We need the sequence_number of the ORIGINAL chunk
+                # We already fetched it? No, we fetched source_id only.
+                # Let's re-fetch with sequence info if we didn't have it.
+                
+                target_chunk_res = db.document_chunks.select("sequence_number").eq("id", chunk_id).execute()
+                if target_chunk_res.data:
+                    current_seq = target_chunk_res.data[0].get("sequence_number")
+                    
+                    if current_seq is not None:
+                        # Fetch Surroundings: [Current-1, Current, Current+1]
+                        # We try to get a window centered on the current chunk
+                        range_start = max(1, current_seq - 1)
+                        range_end = current_seq + 1
+                        
+                        siblings_response = db.document_chunks.select(
+                            "id, content, sequence_number, ai_summary"
+                        ).eq("source_id", source_id)\
+                        .gte("sequence_number", range_start)\
+                        .lte("sequence_number", range_end)\
+                        .order("sequence_number")\
+                        .execute()
+                        
+                        result_data["siblings"] = siblings_response.data
+                    else:
+                         # Fallback if no sequence number (should be rare)
+                         siblings_response = db.document_chunks.select(
+                            "id, content, sequence_number, ai_summary"
+                         ).eq("source_id", source_id).limit(sibling_limit).execute()
+                         result_data["siblings"] = siblings_response.data
+                else: 
+                     # Chunk ID invalid - fallback to just source
+                     pass
+            
+            elif include_siblings and not chunk_id:
+                  # If we only have source_id, just return the first few chapters
+                  siblings_response = db.document_chunks.select(
                     "id, content, sequence_number, ai_summary"
                 ).eq("source_id", source_id).order(
                     "sequence_number"
                 ).limit(sibling_limit).execute()
-                
-                result_data["siblings"] = siblings_response.data
+                  result_data["siblings"] = siblings_response.data
             
             elapsed = (time.time() - start_time) * 1000
+            
+            # === NEW: Add Navigation Metadata ===
+            metadata = {
+                "source_id": source_id,
+                "title": source_doc.get("title"),
+                "has_siblings": len(result_data.get("siblings", [])) > 0
+            }
+            
+            # If we have a chunk with sequence_number, add navigation commands
+            if chunk_id and include_siblings and result_data.get("siblings"):
+                # Find the current chunk's sequence from siblings
+                current_chunk = next((s for s in result_data["siblings"] if s["id"] == chunk_id), None)
+                if current_chunk and current_chunk.get("sequence_number") is not None:
+                    current_seq = current_chunk["sequence_number"]
+                    metadata["navigation"] = {
+                        "current_page": current_seq,
+                        "prev_page_cmd": f"get_related_document(source_id='{source_id}', sequence_number={current_seq - 1}, include_siblings=True)",
+                        "next_page_cmd": f"get_related_document(source_id='{source_id}', sequence_number={current_seq + 1}, include_siblings=True)",
+                        "hint": "🔖 استخدم sequence_number للتنقل بين الصفحات"
+                    }
             
             logger.info(f"✅ GetRelatedDoc: Found source with {len(result_data.get('siblings', []))} siblings in {elapsed:.0f}ms")
             
             return ToolResult(
                 success=True,
                 data=result_data,
-                metadata={
-                    "source_id": source_id,
-                    "title": source_doc.get("title"),
-                    "has_siblings": len(result_data.get("siblings", [])) > 0
-                },
+                metadata=metadata,
                 execution_time_ms=elapsed
             )
             

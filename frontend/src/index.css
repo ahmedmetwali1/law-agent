@@ -132,4 +132,20 @@
   button {
     @apply text-sm;
   }
+
+  /* Marquee Animation - LTR Friendly (Left to Right) */
+  @keyframes marquee {
+    0% {
+      transform: translateX(-100%);
+    }
+
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  .animate-marquee {
+    animation: marquee 30s linear infinite;
+    display: inline-block;
+  }
 }

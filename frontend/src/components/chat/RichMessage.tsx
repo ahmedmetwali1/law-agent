@@ -1,5 +1,6 @@
 import React from 'react';
 import { CheckCircle, XCircle, Calendar, User, Scale, FileText, AlertCircle } from 'lucide-react';
+import { CitationRenderer } from './CitationRenderer';
 
 interface ToolResult {
     success: boolean;
@@ -42,7 +43,7 @@ export const RichMessage: React.FC<RichMessageProps> = ({ content, isUser }) => 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none"
                 style={{ fontFamily: 'Cairo, sans-serif' }}>
-                {content}
+                <CitationRenderer text={content} />
             </div>
         );
     }
@@ -53,8 +54,8 @@ export const RichMessage: React.FC<RichMessageProps> = ({ content, isUser }) => 
             {/* Success/Error Badge */}
             {data.success !== undefined && (
                 <div className={`flex items-center gap-2 p-3 rounded-lg ${data.success
-                        ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
-                        : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                    ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                    : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
                     }`}>
                     {data.success ? (
                         <CheckCircle className="h-5 w-5" />
@@ -195,8 +196,8 @@ const CasesList: React.FC<{ cases: any[] }> = ({ cases }) => (
                             {caseItem.court_name && <p>⚖️ {caseItem.court_name}</p>}
                             {caseItem.status && (
                                 <span className={`inline-block px-2 py-0.5 rounded text-xs ${caseItem.status === 'active'
-                                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
-                                        : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
+                                    ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                                    : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
                                     }`}>
                                     {caseItem.status === 'active' ? 'نشطة' : 'مغلقة'}
                                 </span>

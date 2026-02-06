@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useBreadcrumb } from '../contexts/BreadcrumbContext'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import {
     Plus, Search, Filter, Calendar, BarChart3, Clock, AlertCircle, CheckCircle, Edit, Trash2, Users, X, User, Eye
 } from 'lucide-react'
 import { useAuditLog } from '../hooks/useAuditLog'
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll' // ✅ Import hook
 
 interface Task {
     id: string
@@ -43,94 +44,69 @@ export function TasksPage() {
     const { getEffectiveLawyerId, profile, isAssistant } = useAuth()
     const { setPageTitle } = useBreadcrumb()
     const { logAction } = useAuditLog()
-    const [tasks, setTasks] = useState<Task[]>([])
-    const [loading, setLoading] = useState(true)
+
+    const [searchQuery, setSearchQuery] = useState('')
+    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
+    const [priorityFilter, setPriorityFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all')
+
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
     const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
     const [isEditModalOpen, setIsEditModalOpen] = useState(false)
     const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-    const [searchQuery, setSearchQuery] = useState('')
-    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
-    const [priorityFilter, setPriorityFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all')
+
+    // ✅ Use Infinite Scroll Hook
+    const {
+        data: tasks,
+        loading,
+        hasMore,
+        loadMore,
+        refresh,
+        setParams,
+        total
+    } = useInfiniteScroll<Task>({
+        endpoint: '/api/tasks',
+        limit: 12, // 12 items per batch
+        initialParams: {
+            status: statusFilter === 'all' ? undefined : statusFilter,
+            priority: priorityFilter === 'all' ? undefined : priorityFilter
+        }
+    })
+
+    // Update params when filters change (Debounce search could be added here)
+    useEffect(() => {
+        setParams({
+            status: statusFilter === 'all' ? undefined : statusFilter,
+            priority: priorityFilter === 'all' ? undefined : priorityFilter,
+            search: searchQuery || undefined
+        })
+    }, [statusFilter, priorityFilter, searchQuery, setParams])
 
     useEffect(() => {
         setPageTitle('المهام')
     }, [setPageTitle])
 
-    useEffect(() => {
-        const lawyerId = getEffectiveLawyerId()
-        if (lawyerId) {
-            fetchTasks()
-        }
-    }, [getEffectiveLawyerId])
 
-    const fetchTasks = async () => {
-        try {
-            const lawyerId = getEffectiveLawyerId()
-            if (!lawyerId) return
+    // ✅ Observer for Infinite Scroll
+    const observer = useRef<IntersectionObserver | null>(null)
+    const lastTaskElementRef = useCallback((node: HTMLDivElement | null) => {
+        if (loading) return
+        if (observer.current) observer.current.disconnect()
 
-            let query = supabase
-                .from('tasks')
-                .select(`
-                    *,
-                    assigned_user:users!tasks_assigned_to_fkey(full_name),
-                    completed_user:users!tasks_completed_by_fkey(full_name)
-                `)
-                .eq('lawyer_id', lawyerId)
-                .order('created_at', { ascending: false })
-
-            if (isAssistant && profile) {
-                query = query.or(`assigned_to.eq.${profile.id},assign_to_all.eq.true,user_id.eq.${profile.id}`)
+        observer.current = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting && hasMore) {
+                loadMore()
             }
+        })
 
-            const { data, error } = await query
+        if (node) observer.current.observe(node)
+    }, [loading, hasMore, loadMore])
 
-            if (error) throw error
-            setTasks(data || [])
-        } catch (error: any) {
-            console.error('Error fetching tasks:', error)
-            toast.error('فشل تحميل المهام')
-        } finally {
-            setLoading(false)
-        }
-    }
 
     const updateTaskStatus = async (taskId: string, newStatus: 'pending' | 'in_progress' | 'completed') => {
         try {
-            // الحصول على القيم القديمة
-            const oldTask = tasks.find(t => t.id === taskId)
-
-            const updateData: any = { status: newStatus }
-
-            if (newStatus === 'completed') {
-                updateData.completed_by = profile?.id
-                updateData.completed_at = new Date().toISOString()
-            } else {
-                updateData.completed_by = null
-                updateData.completed_at = null
-            }
-
-            const { error } = await supabase
-                .from('tasks')
-                .update(updateData)
-                .eq('id', taskId)
-
-            if (error) throw error
-
-            // ✅ تسجيل التحديث باستخدام الخطاف الموحد
-            if (oldTask) {
-                await logAction(
-                    'update',
-                    'tasks',
-                    taskId,
-                    oldTask,
-                    { ...oldTask, ...updateData },
-                    'تحديث حالة المهمة'
-                )
-            }
-
+            await apiClient.put(`/api/tasks/${taskId}/status`, { status: newStatus })
             toast.success('تم تحديث حالة المهمة')
-            fetchTasks()
+            refresh() // Refresh list to reflect changes
         } catch (error: any) {
             console.error('Error updating task:', error)
             toast.error('فشل تحديث المهمة')
@@ -141,23 +117,9 @@ export function TasksPage() {
         if (!confirm('هل أنت متأكد من حذف هذه المهمة؟')) return
 
         try {
-            // الحصول على القيم القديمة قبل الحذف
-            const oldTask = tasks.find(t => t.id === taskId)
-
-            const { error } = await supabase
-                .from('tasks')
-                .delete()
-                .eq('id', taskId)
-
-            if (error) throw error
-
-            // ✅ تسجيل الحذف
-            if (oldTask) {
-                await logAction('delete', 'tasks', taskId, oldTask, null, 'حذف مهمة')
-            }
-
+            await apiClient.delete(`/api/tasks/${taskId}`)
             toast.success('تم حذف المهمة')
-            fetchTasks()
+            refresh()
         } catch (error: any) {
             console.error('Error deleting task:', error)
             toast.error('فشل حذف المهمة')
@@ -200,12 +162,6 @@ export function TasksPage() {
         }
     }
 
-    if (loading) {
-        return <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-500"></div>
-        </div>
-    }
-
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -215,7 +171,7 @@ export function TasksPage() {
                         المهام
                     </h1>
                     <p className="text-gray-400 mt-1" style={{ fontFamily: 'Cairo, sans-serif' }}>
-                        إدارة وتتبع المهام
+                        إدارة وتتبع المهام ({total})
                     </p>
                 </div>
                 {!isAssistant && (
@@ -230,43 +186,62 @@ export function TasksPage() {
                 )}
             </div>
 
-            {/* Filters */}
-            <div className="flex gap-3">
-                {[
-                    { value: 'all', label: 'الكل', count: tasks.length },
-                    { value: 'pending', label: 'معلقة', count: tasks.filter(t => t.status === 'pending').length },
-                    { value: 'completed', label: 'مكتملة', count: tasks.filter(t => t.status === 'completed').length }
-                ].map((f) => (
-                    <button
-                        key={f.value}
-                        onClick={() => setStatusFilter(f.value as any)}
-                        className={`px-4 py-2 rounded-lg transition-all ${statusFilter === f.value
-                            ? 'bg-cobalt-600 text-white'
-                            : 'bg-obsidian-800 text-gray-400 hover:bg-obsidian-700'
-                            }`}
+            {/* Filters & Search */}
+            <div className="flex flex-col md:flex-row gap-4 items-center justify-between bg-obsidian-800/50 p-4 rounded-xl border border-gold-500/10">
+                {/* Search */}
+                <div className="relative w-full md:w-96">
+                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="بحث في المهام..."
+                        className="w-full pr-10 pl-4 py-2 bg-obsidian-900/80 border border-gray-700 rounded-lg focus:border-gold-500 focus:outline-none text-white"
                         style={{ fontFamily: 'Cairo, sans-serif' }}
-                    >
-                        {f.label} ({f.count})
-                    </button>
-                ))}
+                    />
+                </div>
+
+                {/* Status Filters */}
+                <div className="flex gap-2 overflow-x-auto pb-2 md:pb-0 w-full md:w-auto">
+                    {[
+                        { value: 'all', label: 'الكل' },
+                        { value: 'pending', label: 'معلقة' },
+                        { value: 'in_progress', label: 'قيد التنفيذ' },
+                        { value: 'completed', label: 'مكتملة' }
+                    ].map((f) => (
+                        <button
+                            key={f.value}
+                            onClick={() => setStatusFilter(f.value as any)}
+                            className={`px-4 py-2 rounded-lg transition-all whitespace-nowrap ${statusFilter === f.value
+                                ? 'bg-cobalt-600 text-white'
+                                : 'bg-obsidian-900 text-gray-400 hover:bg-obsidian-700'
+                                }`}
+                            style={{ fontFamily: 'Cairo, sans-serif' }}
+                        >
+                            {f.label}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             {/* Tasks Grid */}
-            {tasks.length === 0 ? (
+            {tasks.length === 0 && !loading ? (
                 <div className="glass-card p-12 text-center">
                     <AlertCircle className="w-16 h-16 text-gray-600 mx-auto mb-4" />
                     <p className="text-gray-400" style={{ fontFamily: 'Cairo, sans-serif' }}>
-                        لا توجد مهام
+                        لا توجد مهام مطابقة للبحث
                     </p>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {tasks.map((task) => (
+                    {tasks.map((task, index) => (
                         <motion.div
                             key={task.id}
-                            initial={{ opacity: 1, y: 0 }}
+                            initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="glass-card p-4 space-y-3"
+                            transition={{ delay: index * 0.05 }}
+                            ref={index === tasks.length - 1 ? lastTaskElementRef : null} // ✅ Attach Observer to last element
+                            className="glass-card p-4 space-y-3 hover:border-gold-500/30 transition-all group"
                         >
                             {/* Header */}
                             <div className="flex items-start justify-between">
@@ -394,13 +369,19 @@ export function TasksPage() {
                 </div>
             )}
 
+            {loading && (
+                <div className="flex justify-center p-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-500"></div>
+                </div>
+            )}
+
             {/* Modals */}
             {isCreateModalOpen && (
                 <CreateTaskModal
                     onClose={() => setIsCreateModalOpen(false)}
                     onSuccess={() => {
                         setIsCreateModalOpen(false)
-                        fetchTasks()
+                        refresh()
                     }}
                 />
             )}
@@ -425,7 +406,7 @@ export function TasksPage() {
                     onSuccess={() => {
                         setIsEditModalOpen(false)
                         setSelectedTask(null)
-                        fetchTasks()
+                        refresh()
                     }}
                 />
             )}
@@ -562,17 +543,8 @@ function EditTaskModal({ task, onClose, onSuccess }: EditTaskModalProps) {
 
     const fetchAssistants = async () => {
         try {
-            const lawyerId = getEffectiveLawyerId()
-            if (!lawyerId) return
-
-            const { data, error } = await supabase
-                .from('users')
-                .select('id, full_name, email')
-                .eq('office_id', lawyerId)
-                .eq('role', 'assistant')
-                .eq('is_active', true)
-
-            if (error) throw error
+            // ✅ BFF Pattern: استخدام apiClient
+            const data = await apiClient.get<Assistant[]>('/api/tasks/assistants')
             setAssistants(data || [])
         } catch (error) {
             console.error('Error fetching assistants:', error)
@@ -599,24 +571,8 @@ function EditTaskModal({ task, onClose, onSuccess }: EditTaskModalProps) {
                 assign_to_all: formData.assign_to_all
             }
 
-            const { error } = await supabase
-                .from('tasks')
-                .update(newData)
-                .eq('id', task.id)
-
-            if (error) throw error
-
-            // ✅ تسجيل التعديل باستخدام useAuditLog
-            const lawyerId = getEffectiveLawyerId()
-
-            await logAction(
-                'update',
-                'tasks',
-                task.id,
-                { title: task.title, description: task.description, priority: task.priority },
-                newData,
-                'تعديل مهمة'
-            )
+            // ✅ BFF Pattern: Backend يتولى التحقق والتسجيل
+            await apiClient.put(`/api/tasks/${task.id}`, newData)
 
             toast.success('تم تحديث المهمة بنجاح')
             onSuccess()
@@ -791,17 +747,8 @@ function CreateTaskModal({ onClose, onSuccess }: CreateTaskModalProps) {
 
     const fetchAssistants = async () => {
         try {
-            const lawyerId = getEffectiveLawyerId()
-            if (!lawyerId) return
-
-            const { data, error } = await supabase
-                .from('users')
-                .select('id, full_name, email')
-                .eq('office_id', lawyerId)
-                .eq('role', 'assistant')
-                .eq('is_active', true)
-
-            if (error) throw error
+            // ✅ BFF Pattern: استخدام apiClient
+            const data = await apiClient.get<Assistant[]>('/api/tasks/assistants')
             setAssistants(data || [])
         } catch (error) {
             console.error('Error fetching assistants:', error)
@@ -819,39 +766,17 @@ function CreateTaskModal({ onClose, onSuccess }: CreateTaskModalProps) {
         setLoading(true)
 
         try {
-            const lawyerId = getEffectiveLawyerId()
-            if (!lawyerId) throw new Error('خطأ في المصادقة')
-
+            // ✅ BFF Pattern: Backend يتولى تعيين lawyer_id من JWT وتسجيل التدقيق
             const taskData = {
-                lawyer_id: lawyerId,
-                user_id: profile?.id,
                 title: formData.title,
                 description: formData.description || null,
                 execution_date: formData.execution_date || null,
                 priority: formData.priority,
                 assigned_to: formData.assign_to_all ? null : (formData.assigned_to || null),
-                assign_to_all: formData.assign_to_all,
-                status: 'pending'
+                assign_to_all: formData.assign_to_all
             }
 
-            const { data, error } = await supabase
-                .from('tasks')
-                .insert(taskData)
-                .select()
-
-            if (error) throw error
-
-            // ✅ تسجيل الإنشاء باستخدام useAuditLog
-            if (data && data[0]) {
-                await logAction(
-                    'create',
-                    'tasks',
-                    data[0].id,
-                    null,
-                    taskData,
-                    'إضافة مهمة جديدة'
-                )
-            }
+            await apiClient.post('/api/tasks', taskData)
 
             toast.success('تم إنشاء المهمة بنجاح')
             onSuccess()

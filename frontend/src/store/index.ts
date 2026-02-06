@@ -6,12 +6,13 @@ interface Message {
     role: 'user' | 'assistant' | 'system';
     content: string;
     timestamp: Date;
+    metadata?: any;
 }
 
 interface ChatStore {
     messages: Message[];
     isTyping: boolean;
-    addMessage: (role: Message['role'], content: string) => void;
+    addMessage: (role: Message['role'], content: string, metadata?: any) => void;
     setTyping: (typing: boolean) => void;
     clearMessages: () => void;
 }
@@ -26,7 +27,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         },
     ],
     isTyping: false,
-    addMessage: (role, content) =>
+    addMessage: (role, content, metadata) =>
         set((state) => ({
             messages: [
                 ...state.messages,
@@ -35,6 +36,7 @@ export const useChatStore = create<ChatStore>((set) => ({
                     role,
                     content,
                     timestamp: new Date(),
+                    metadata,
                 },
             ],
         })),

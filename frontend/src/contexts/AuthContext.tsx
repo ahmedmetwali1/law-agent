@@ -12,13 +12,27 @@ interface UserProfile {
     id: string
     email: string
     full_name: string
-    phone_number: string | null // ✅ Renamed from phone to phone_number
+    phone: string | null
+    phone_number: string | null
     country_id: string
     role_id: string
     office_id: string | null
     specialization: string | null
     license_number: string | null
     bio: string | null
+    profile_image_url: string | null
+    office_address: string | null
+    office_city: string | null
+    office_postal_code: string | null
+    business_hours: any | null
+    timezone: string | null
+    notification_preferences: any | null
+    lawyer_license_type: string | null
+    bar_association: string | null
+    years_of_experience: number | null
+    languages: string[] | null
+    website: string | null
+    linkedin_profile: string | null
     is_active: boolean
     // Relations
     country?: {
@@ -31,7 +45,14 @@ interface UserProfile {
         id: string
         name: string
         name_ar: string
-        permissions?: RolePermissions  // ✅ NEW: الصلاحيات
+        permissions?: RolePermissions
+    }
+    // ✅ NEW: بيانات الاشتراك (للمحامين)
+    subscription_info?: {
+        status: string
+        days_remaining: number
+        is_expired: boolean
+        package_name: string
     }
 }
 

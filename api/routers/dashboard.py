@@ -228,31 +228,7 @@ async def get_calendar_events(
         
         logger.info(f"📅 Fetching calendar events from {start_date} to {end_date}")
         
-        # 1. Fetch cases for lookup
-        cases_result = supabase.table('cases')\
-            .select('id, subject, case_number, court_name, clients(full_name)')\
-            .eq('lawyer_id', lawyer_id)\
-            .execute()
-        
-        # Create lookup map
-        cases_map = {}
-        if cases_result.data:
-            for case in cases_result.data:
-                client_name = None
-                if case.get('clients'):
-                    if isinstance(case['clients'], list) and len(case['clients']) > 0:
-                        client_name = case['clients'][0].get('full_name')
-                    elif isinstance(case['clients'], dict):
-                        client_name = case['clients'].get('full_name')
-                
-                cases_map[case['id']] = {
-                    'subject': case.get('subject'),
-                    'case_number': case.get('case_number'),
-                    'court_name': case.get('court_name'),
-                    'client_name': client_name
-                }
-        
-        # 2. Fetch hearings
+        # 1. Fetch hearings
         hearings_result = supabase.table('hearings')\
             .select('id, hearing_date, hearing_time, case_id')\
             .eq('lawyer_id', lawyer_id)\
@@ -260,15 +236,41 @@ async def get_calendar_events(
             .lte('hearing_date', end_date)\
             .execute()
         
-        # 3. Fetch tasks
+        # 2. Fetch tasks
         tasks_result = supabase.table('tasks')\
             .select('id, title, execution_date, priority, case_id')\
             .eq('lawyer_id', lawyer_id)\
             .gte('execution_date', start_date)\
             .lte('execution_date', end_date)\
             .execute()
+            
+        # 3. Collect unique Case IDs
+        case_ids = set()
+        if hearings_result.data:
+            case_ids.update(h['case_id'] for h in hearings_result.data if h.get('case_id'))
+        if tasks_result.data:
+            case_ids.update(t['case_id'] for t in tasks_result.data if t.get('case_id'))
+            
+        # 4. Fetch Cases (Only relevant ones) - Using fast columns
+        cases_map = {}
+        if case_ids:
+            # Try to use client_name if available (denormalized), else fallback or select both
+            # Assuming 'client_name' is the new fast column as per instructions.
+            cases_result = supabase.table('cases')\
+                .select('id, subject, case_number, court_name, client_name')\
+                .in_('id', list(case_ids))\
+                .execute()
+                
+            if cases_result.data:
+                for case in cases_result.data:
+                    cases_map[case['id']] = {
+                        'subject': case.get('subject'),
+                        'case_number': case.get('case_number'),
+                        'court_name': case.get('court_name'),
+                        'client_name': case.get('client_name') or "مجهول"
+                    }
         
-        # 4. Format events
+        # 5. Format events
         events = []
         
         # Format hearings
@@ -285,8 +287,8 @@ async def get_calendar_events(
                 if case_info.get('court_name'):
                     title += f" - {case_info['court_name']}"
                 
-                if not case_info:
-                    title = 'جلسة (بدون تفاصيل)'
+                if not case_info and h.get('case_id'):
+                    title = 'جلسة (جاري التحميل...)'
                 
                 events.append({
                     'id': h['id'],

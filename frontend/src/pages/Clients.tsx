@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Plus, Search, Phone, Mail, MapPin, FileText, Scale, User, ChevronLeft, ChevronRight } from 'lucide-react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { useBreadcrumb } from '../contexts/BreadcrumbContext'
 import { toast } from 'sonner'
 import { useAuditLog } from '../hooks/useAuditLog'
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll' // ✅ Import
 
 interface Client {
     id: string
@@ -27,61 +29,54 @@ const CLIENTS_PER_PAGE = 12
 
 export function ClientsPage() {
     const navigate = useNavigate()
-    const { getEffectiveLawyerId } = useAuth()  // ✅ للقراءة والكتابة
+    const { getEffectiveLawyerId } = useAuth()
+    const { setPageTitle } = useBreadcrumb()
     const { logAction } = useAuditLog()
-    const [clients, setClients] = useState<Client[]>([])
-    const [loading, setLoading] = useState(true)
     const [searchQuery, setSearchQuery] = useState('')
     const [showCreateModal, setShowCreateModal] = useState(false)
-    const [currentPage, setCurrentPage] = useState(1)
+
+    // ✅ Use Infinite Scroll Hook
+    const {
+        data: clients,
+        loading,
+        hasMore,
+        loadMore,
+        refresh,
+        setParams,
+        total
+    } = useInfiniteScroll<Client>({
+        endpoint: '/api/clients',
+        limit: 12,
+        initialParams: {}
+    })
+
+    // Update params when search changes
+    useEffect(() => {
+        setParams({
+            search: searchQuery || undefined
+        })
+    }, [searchQuery, setParams])
 
     useEffect(() => {
-        const lawyerId = getEffectiveLawyerId()
-        if (lawyerId) {
-            fetchClients()
-        }
-    }, [getEffectiveLawyerId])
+        setPageTitle('الموكلون')
+    }, [setPageTitle])
 
-    const fetchClients = async () => {
-        const lawyerId = getEffectiveLawyerId()
-        if (!lawyerId) return
 
-        try {
-            setLoading(true)
-            const { data, error } = await supabase
-                .from('clients')
-                .select('*')
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .order('full_name', { ascending: true }) // Alphabetical order
+    // ✅ Observer
+    const observer = useRef<IntersectionObserver | null>(null)
+    const lastClientElementRef = useCallback((node: HTMLDivElement | null) => {
+        if (loading) return
+        if (observer.current) observer.current.disconnect()
 
-            if (error) throw error
+        observer.current = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting && hasMore) {
+                loadMore()
+            }
+        })
 
-            setClients(data || [])
-        } catch (error) {
-            console.error('Error fetching clients:', error)
-            toast.error('فشل تحميل الموكلين')
-        } finally {
-            setLoading(false)
-        }
-    }
+        if (node) observer.current.observe(node)
+    }, [loading, hasMore, loadMore])
 
-    const filteredClients = clients.filter(client =>
-        client.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        client.phone?.includes(searchQuery) ||
-        client.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        client.national_id?.includes(searchQuery)
-    )
-
-    // Pagination
-    const totalPages = Math.ceil(filteredClients.length / CLIENTS_PER_PAGE)
-    const startIndex = (currentPage - 1) * CLIENTS_PER_PAGE
-    const endIndex = startIndex + CLIENTS_PER_PAGE
-    const currentClients = filteredClients.slice(startIndex, endIndex)
-
-    // Reset to page 1 when search changes
-    useEffect(() => {
-        setCurrentPage(1)
-    }, [searchQuery])
 
     return (
         <div className="space-y-6">
@@ -120,17 +115,12 @@ export function ClientsPage() {
             {/* Results Count */}
             {!loading && (
                 <div className="text-sm text-gray-400" style={{ fontFamily: 'Cairo, sans-serif' }}>
-                    عرض {currentClients.length} من {filteredClients.length} موكل
+                    عرض {clients.length} من {total} موكل
                 </div>
             )}
 
             {/* Clients Grid */}
-            {loading ? (
-                <div className="text-center py-12">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold-500 mx-auto"></div>
-                    <p className="text-gray-400 mt-4" style={{ fontFamily: 'Cairo, sans-serif' }}>جاري التحميل...</p>
-                </div>
-            ) : filteredClients.length === 0 ? (
+            {clients.length === 0 && !loading ? (
                 <div className="text-center py-12 backdrop-blur-xl bg-obsidian-800/50 border border-gold-500/20 rounded-xl">
                     <User className="w-16 h-16 text-gray-600 mx-auto mb-4" />
                     <h3 className="text-xl font-bold text-gray-400 mb-2" style={{ fontFamily: 'Cairo, sans-serif' }}>
@@ -143,12 +133,13 @@ export function ClientsPage() {
             ) : (
                 <>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {currentClients.map((client, index) => (
+                        {clients.map((client: Client, index: number) => (
                             <motion.div
                                 key={client.id}
-                                initial={{ opacity: 1, y: 0 }}
+                                initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: index * 0.05 }}
+                                ref={index === clients.length - 1 ? lastClientElementRef : null} // ✅ Attach Observer
                                 onClick={() => navigate(`/clients/${client.id}`)}
                                 className="backdrop-blur-xl bg-obsidian-800/70 border border-gold-500/20 rounded-xl p-6 hover:border-gold-500/50 transition-all cursor-pointer group"
                             >
@@ -205,44 +196,13 @@ export function ClientsPage() {
                             </motion.div>
                         ))}
                     </div>
-
-                    {/* Pagination */}
-                    {totalPages > 1 && (
-                        <div className="flex items-center justify-center gap-2 mt-8">
-                            <button
-                                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                                disabled={currentPage === 1}
-                                className="p-2 rounded-lg bg-obsidian-800 border border-gold-500/20 text-white hover:border-gold-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                            >
-                                <ChevronRight className="w-5 h-5" />
-                            </button>
-
-                            <div className="flex items-center gap-2">
-                                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                                    <button
-                                        key={page}
-                                        onClick={() => setCurrentPage(page)}
-                                        className={`px-4 py-2 rounded-lg font-medium transition-all ${currentPage === page
-                                            ? 'bg-gold-500 text-obsidian-900'
-                                            : 'bg-obsidian-800 border border-gold-500/20 text-white hover:border-gold-500/50'
-                                            }`}
-                                        style={{ fontFamily: 'Cairo, sans-serif' }}
-                                    >
-                                        {page}
-                                    </button>
-                                ))}
-                            </div>
-
-                            <button
-                                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                                disabled={currentPage === totalPages}
-                                className="p-2 rounded-lg bg-obsidian-800 border border-gold-500/20 text-white hover:border-gold-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                            >
-                                <ChevronLeft className="w-5 h-5" />
-                            </button>
-                        </div>
-                    )}
                 </>
+            )}
+
+            {loading && (
+                <div className="flex justify-center p-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold-500"></div>
+                </div>
             )}
 
             {/* Create Modal */}
@@ -251,7 +211,7 @@ export function ClientsPage() {
                     onClose={() => setShowCreateModal(false)}
                     onSuccess={() => {
                         setShowCreateModal(false)
-                        fetchClients()
+                        refresh() // ✅ Refresh list
                     }}
                 />
             )}
@@ -302,33 +262,36 @@ function CreateClientModal({ onClose, onSuccess }: CreateClientModalProps) {
                 return
             }
 
-            const clientData = {
-                lawyer_id: lawyerId,
+            // Create client via Backend API
+            const payload = {
                 full_name: formData.full_name,
                 email: formData.email || null,
                 phone: formData.phone || null,
                 national_id: formData.national_id || null,
                 address: formData.address || null,
+                notes: formData.notes,
                 has_power_of_attorney: formData.has_power_of_attorney,
                 power_of_attorney_number: formData.power_of_attorney_number || null,
                 power_of_attorney_image_url: formData.power_of_attorney_image_url || null
             }
 
-            const { data, error } = await supabase
-                .from('clients')
-                .insert([clientData])
-                .select()
+            const response = await apiClient.post('/api/clients', payload)
 
-            if (error) throw error
+            if (!response.success) throw new Error('Failed to create client')
 
-            // ✅ تسجيل العملية
-            if (data && data[0]) {
+            // Log action is handled by Backend usually? 
+            // If we keep frontend logging, we need "data" from response.
+            const newClient = response.client
+
+
+            // ✅ تسجيل العملية - Optional if backend logs it, but keeping for now
+            if (newClient) {
                 await logAction(
                     'create',
                     'clients',
-                    data[0].id,
+                    newClient.id,
                     null,
-                    clientData,
+                    payload,
                     'إضافة موكل جديد'
                 )
             }

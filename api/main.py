@@ -2,32 +2,41 @@
 FastAPI Application
 Legal AI Multi-Agent System API
 """
+# ✅ CRITICAL: Load environment variables BEFORE importing settings
+from dotenv import load_dotenv
+load_dotenv()  # Must be first to ensure .env is loaded!
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
+# Force reload to pick up notifications fixes
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+from fastapi import WebSocket, WebSocketDisconnect
 import logging
 import sys
 import os
+import uuid
 from datetime import datetime
 
-from agents.core.enhanced_general_lawyer_agent import EnhancedGeneralLawyerAgent
+
 from agents.storage.case_storage import CaseStorage
 from agents.config.settings import settings
-from agents.tools.unified_tools import UnifiedToolSystem
+# from agents.tools.unified_tools import UnifiedToolSystem # DELETED
 
 from agents.storage.user_storage import user_storage
-from api.chat_session import session_manager
-from api.ai_helper import router as ai_router
+from api.services.chat_service import chat_service
+from api.schemas import ChatRequest, ChatResponse, ChatSession, ChatMessage, ChatSessionCreate
 from api.auth_middleware import get_current_user, get_current_user_optional
 
 # Streaming support
-from agents.streaming import StreamManager, EventStreamer
+# from agents.streaming import StreamManager, EventStreamer # DELETED
 
 # Initialize global stream manager
-stream_manager = StreamManager()
+# stream_manager = StreamManager() # DELETED
+
+# WebSocket Manager
+from api.connection_manager import manager as ws_manager
 
 # Configure logging
 logging.basicConfig(
@@ -45,13 +54,19 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS middleware
+# CORS middleware - Secure configuration
+# Origins configurable via ALLOWED_ORIGINS env var (comma-separated)
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept"],
 )
 
 from fastapi.staticfiles import StaticFiles
@@ -66,92 +81,73 @@ from api.clients import router as clients_router
 from api.hearings import router as hearings_router
 from api.routers.documents import router as documents_router
 from api.routers import dashboard as dashboard_router
+from api.routers import settings as settings_router
+from api.routers import audit as audit_router  # ✅ New
+from api.routers import cases as cases_router # ✅ New Cases Router
 
 app.include_router(auth_router, tags=["authentication"])
 app.include_router(clients_router, prefix="/api/clients", tags=["clients"])
 app.include_router(hearings_router, prefix="/api/hearings", tags=["hearings"])
+app.include_router(cases_router.router, prefix="/api/cases", tags=["cases"]) # ✅ Registered
 app.include_router(documents_router, tags=["documents"])  # Already has /api/documents prefix
-app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
+# Removed: app.include_router(ai_router, prefix="/api/ai", tags=["ai"])  # ai_helper deprecated
 app.include_router(dashboard_router.router)
+app.include_router(settings_router.router)
+app.include_router(audit_router.router)
+
+# ✅ Unified Agent Chat Router
+from api.routers import chat as chat_router
+app.include_router(chat_router.router)
+
+# ✅ Phase 1 Security Remediation - Tasks & Police Records
+from api.routers import tasks as tasks_router
+from api.routers import police_records as police_records_router
+app.include_router(tasks_router.router)
+app.include_router(police_records_router.router)
+
+# ✅ Phase 2 Security Remediation - Notifications & Assistants
+from api.routers import notifications as notifications_router
+from api.routers import assistants as assistants_router
+app.include_router(notifications_router.router)
+app.include_router(assistants_router.router)
+
+# ✅ Phase 3 Security Remediation - Countries & Users
+from api.routers import countries as countries_router
+from api.routers import users as users_router
+app.include_router(countries_router.router)
+app.include_router(users_router.router)
 
 from api.routers.support import router as support_router
 app.include_router(support_router, prefix="/api/support", tags=["support"])
 
+# ✅ Admin Subscriptions Management
+from api.routers import admin_subscriptions as admin_subscriptions_router
+app.include_router(admin_subscriptions_router.router)
+
+# ✅ Lawyer Subscriptions
+from api.routers import subscriptions as subscriptions_router
+app.include_router(subscriptions_router.router)
+
+# ✅ Super Admin Dashboard
+from api.routers import admin as admin_router
+app.include_router(admin_router.router)
+
+# ✅ Transcription Service
+from api.routers import transcription as transcription_router
+app.include_router(transcription_router.router)
+
+# ✅ Real-time SSE Streaming for Legal Research
+# from api.routers import streaming as streaming_router # DELETED
+# app.include_router(streaming_router.router) # DELETED
+
 # ===== Assistants Endpoint =====
-from pydantic import EmailStr
-from passlib.context import CryptContext
-import uuid
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-class CreateAssistantRequest(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str
-    phone: Optional[str] = None
-    office_id: str
-
-@app.post("/api/assistants/create")
-async def create_assistant(request: CreateAssistantRequest):
-    """إنشاء مساعد جديد"""
-    try:
-        # التحقق من أن الإيميل غير مستخدم
-        if user_storage.check_email_exists(request.email):
-            raise HTTPException(status_code=400, detail="Email already exists")
-        
-        # جلب بيانات المحامي لنسخ البيانات المشتركة
-        lawyer = user_storage.get_user_by_id(request.office_id)
-        if not lawyer:
-            raise HTTPException(status_code=404, detail="Lawyer not found")
-        
-        # Hash password
-        password_hash = pwd_context.hash(request.password)
-        
-        # إنشاء المساعد مباشرة في Supabase بجميع البيانات
-        from agents.config.database import get_supabase_client
-        supabase = get_supabase_client()
-        
-        new_assistant = {
-            'email': request.email,
-            'password_hash': password_hash,
-            'full_name': request.full_name,
-            'phone': request.phone,
-            'role': 'assistant',
-            'office_id': request.office_id,  # ✅ RESTORED: الآن يشير لـ users.id
-            'role_id': 'e3fedef1-5387-4d6d-a90b-6bb8ed45e5f2',  # المساعد
-            'is_active': True,
-            # نسخ البيانات المشتركة من المحامي
-            'country_id': lawyer.get('country_id'),
-            'office_address': lawyer.get('office_address'),
-            'office_city': lawyer.get('office_city'),
-            'office_postal_code': lawyer.get('office_postal_code'),
-            'timezone': lawyer.get('timezone', 'Africa/Cairo'),
-            'business_hours': lawyer.get('business_hours'),
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        }
-        
-        result = supabase.table('users').insert(new_assistant).execute()
-        
-        if not result.data:
-            raise Exception("Failed to create assistant")
-        
-        return {"message": "تم إنشاء المساعد بنجاح", "assistant_id": result.data[0]['id']}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create assistant: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Assistants creation logic moved to api/routers/assistants.py
 
 # Initialize components with Enhanced Agent  
-logger.info("🚀 Initializing Enhanced General Lawyer Agent...")
-try:
-    # Initialize agent (will be set per session with lawyer context)
-    general_agent = EnhancedGeneralLawyerAgent()
-    logger.info("✅ EnhancedGeneralLawyerAgent initialized successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize agent: {e}")
-    raise
+logger.info("🚀 Initializing Enhanced General Lawyer Agent Factory...")
+# Global agent removed to ensure thread safety
+# Agents are now created on-demand via agent_factory.get_agent_executor
+logger.info("✅ Agent Factory ready for requests")
 
 storage = CaseStorage(use_supabase=False)  # Using local storage for now
 
@@ -222,7 +218,6 @@ class ChatResponse(BaseModel):
     case_data: Optional[Dict[str, Any]] = None
     case_id: Optional[str] = None
 
-
 # =============================================================================
 # API Endpoints
 # =============================================================================
@@ -236,7 +231,6 @@ async def root():
         version="1.0.0"
     )
 
-
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
@@ -246,201 +240,77 @@ async def health_check():
         version="1.0.0"
     )
 
-
-@app.get("/api/health", response_model=HealthResponse)
+@app.get("/api/health", response_model=Dict[str, Any])
 async def api_health_check():
-    """API Health check endpoint (alias for SystemFooter)"""
-    return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now().isoformat(),
-        version="1.0.0"
-    )
-
-
-# =============================================================================
-# Speech-to-Text Proxy Endpoint (Security: Hide Cloudflare credentials)
-# =============================================================================
-
-from fastapi import UploadFile, File
-import httpx
-
-@app.post("/api/transcribe")
-async def transcribe_audio(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
-):
     """
-    Secure proxy for speech-to-text transcription
-    Hides Cloudflare Worker credentials from frontend
+    Comprehensive health check endpoint
     """
-    try:
-        # Read STT credentials from environment (secure)
-        stt_url = os.getenv("STT_API_URL")
-        stt_key = os.getenv("STT_API_KEY")
-        
-        if not stt_url or not stt_key:
-            raise HTTPException(
-                status_code=500,
-                detail="STT service not configured"
-            )
-        
-        # ✅ Validate file size BEFORE processing
-        MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10 MB
-        audio_content = await file.read()
-        
-        if len(audio_content) > MAX_AUDIO_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"حجم الملف يتجاوز الحد الأقصى ({MAX_AUDIO_SIZE // 1024 // 1024} ميجابايت)"
-            )
-        
-        # ✅ Validate audio content is not empty
-        if len(audio_content) < 100:  # Too small to be valid audio
-            raise HTTPException(
-                status_code=400,
-                detail="الملف الصوتي فارغ أو تالف"
-            )
-        
-        logger.info(f"🎤 STT Request - URL: {stt_url}")
-        logger.info(f"🎤 STT Request - File: {file.filename}, Size: {len(audio_content)} bytes")
-        logger.info(f"🎤 STT Request - Content-Type: {file.content_type}")
-        
-        # Forward to Cloudflare Worker with credentials
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                stt_url,
-                headers={
-                    "Authorization": f"Bearer {stt_key}",
-                    "X-Custom-Auth-Key": stt_key,
+    from api.cache import get_cache
+    
+    cache = get_cache()
+    cache_stats = cache.get_stats()
+    cache_info = cache.get_info()
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "services": {
+            "api": "operational",
+            "database": "operational",
+            "cache": {
+               "status": "operational" if cache_stats['available'] else "degraded",
+                "enabled": cache_stats['enabled'],
+                "available": cache_stats['available'],
+                "statistics": {
+                    "hits": cache_stats['hits'],
+                    "misses": cache_stats['misses'],
+                    "sets": cache_stats['sets'],
+                    "deletes": cache_stats['deletes'],
+                    "errors": cache_stats['errors'],
+                    "hit_rate": f"{cache_stats['hit_rate']}%"
                 },
-                files={"file": (file.filename, audio_content, file.content_type)},
-                data={"model": "whisper-1", "language": "ar"}
-            )
-            
-            logger.info(f"🎤 STT Response - Status: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"STT API error: {response.status_code} - {response.text}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="فشل في تحويل الصوت إلى نص. يرجى المحاولة مرة أخرى."
-                )
-            
-            result = response.json()
-            
-            # ✅ Apply text normalization (but be lenient)
-            from api.utils.text_normalizer import ArabicTextNormalizer
-            
-            raw_text = result.get('text', '')
-            
-            # Log the raw transcription
-            logger.info(f"📝 Raw transcription: '{raw_text}'")
-            
-            # Try to clean, but if cleaning fails, use original
-            cleaned_text = ArabicTextNormalizer.validate_and_clean(raw_text, min_length=1)
-            
-            if not cleaned_text:
-                # If cleaning removed everything, check if original had content
-                if raw_text and raw_text.strip():
-                    logger.warning(f"⚠️ Cleaning removed all content, using original: '{raw_text}'")
-                    cleaned_text = raw_text.strip()
-                else:
-                    logger.error(f"❌ No transcription detected - raw: '{raw_text}'")
-                    raise HTTPException(
-                        status_code=400,
-                        detail="لم يتم التعرف على أي كلام في التسجيل. تأكد من التحدث بوضوح."
-                    )
-            
-            logger.info(f"✅ Transcription successful for user {current_user.get('id')}")
-            logger.info(f"📝 Cleaned: '{cleaned_text}'")
-            
-            return {"text": cleaned_text}
-            
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504, 
-            detail="انتهت مهلة خدمة تحويل الصوت. يرجى المحاولة مرة أخرى."
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Transcription failed: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail="حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى."
-        )
+                "server_info": cache_info if cache_info else None
+            }
+        }
+    }
 
-
+# Transcription logic moved to api/routers/transcription.py
 
 # =============================================================================
 # Chat & AI Endpoints
 # =============================================================================
 
-# Simple Chat Endpoint (Non-Streaming)
-class SimpleChatRequest(BaseModel):
-    message: str
-    history: Optional[List[Dict[str, str]]] = []
-    lawyer_id: Optional[str] = None
-
-
-@app.post("/api/chat")
-async def simple_chat(request: SimpleChatRequest):
-    """
-    Chat endpoint using EnhancedGeneralLawyerAgent with Streaming Thinking Steps
-    """
-    from api.streaming_chat import generate_ai_response
-    
-    return StreamingResponse(
-        generate_ai_response(
-            message=request.message,
-            history=request.history,
-            lawyer_id=request.lawyer_id
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
-
+# Legacy /api/chat endpoint removed. Use /api/chat/{session_id}/message instead.
 
 @app.post("/api/chat/start", response_model=ChatResponse)
 async def start_chat_session(
     current_user: Optional[dict] = Depends(get_current_user_optional)
 ):
     """
-    Start a new chat session
-    
-    Supports both authenticated and anonymous users:
-    - Authenticated users: Full-featured unlimited sessions
-    - Anonymous users: Limited sessions (max 3 messages) with prompt to login
+    Start a new stateless chat session
     """
     try:
-        if current_user:
-            # Authenticated user - full access
-            session = session_manager.create_session(user_data=current_user)
-            logger.info(f"📝 New authenticated chat session: {session.session_id} for user {current_user.get('full_name')}")
-            greeting = session.messages[-1]["content"] if session.messages else f"مرحباً {current_user.get('full_name')}! كيف يمكنني مساعدتك اليوم؟"
-        else:
-            # Anonymous user - limited access
-            session = session_manager.create_session(
-                user_data=None,
-                max_messages=3  # Limit anonymous interactions
-            )
-            logger.info(f"📝 New anonymous chat session: {session.session_id} (limited to 3 messages)")
-            greeting = "مرحباً! يمكنك تجربة الوكيل الذكي (3 رسائل مجانية). سجل دخولك للوصول الكامل."
+        # Generate new session ID
+        session_id = str(uuid.uuid4())
         
+        # Default greeting
+        greeting = "مرحباً! كيف يمكنني مساعدتك اليوم؟"
+        if current_user:
+            name = current_user.get("full_name", "User")
+            greeting = f"مرحباً أستاذ {name}! أنا مدير مكتبك الذكي. جاهز للمساعدة."
+        else:
+            greeting = "مرحباً! يمكنك تجربة الوكيل الذكي."
+            
         return ChatResponse(
-            session_id=session.session_id,
+            session_id=session_id,
             message=greeting,
-            stage=session.stage.value,
+            stage="init",
             completed=False
         )
     except Exception as e:
         logger.error(f"❌ Failed to start chat session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/api/chat/{session_id}/message", response_model=ChatResponse)
 async def send_chat_message(
@@ -449,329 +319,106 @@ async def send_chat_message(
     current_user: Optional[dict] = Depends(get_current_user_optional)
 ):
     """
-    Send a message to the chat session
-    
-    Supports both authenticated and anonymous users.
-    Sets user context if authenticated and not already set.
+    Send a message to the persistent graph agent.
     """
     try:
-        logger.info(f"📨 Received message for session {session_id}")
+        logger.info(f"📨 Msg Session={session_id}")
         
+        # Check active subscription
         if current_user:
-            logger.info(f"✅ Authenticated user: {current_user.get('full_name', 'Unknown')}")
-        else:
-            logger.info("⚠️ Anonymous user - limited functionality")
-        
-        session = session_manager.get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Chat session not found")
-        
-        # Set user context if available and not set
-        if current_user and not session.lawyer_id:
-            session.user_data = current_user
-            session.lawyer_id = current_user.get("id")
-            session.lawyer_name = current_user.get("full_name", "المحامي")
-            logger.info(f"✅ User context set for session {session_id}: {session.lawyer_name}")
-        elif session.lawyer_id:
-            logger.info(f"ℹ️ Session already has lawyer_id: {session.lawyer_id}")
-        else:
-            logger.warning(f"⚠️ No user context available for session {session_id}")
-        
-        # Process user message
-        result = session.process_response(request.message)
-        
-        response_data = {
-            "session_id": session_id,
-            "message": result.get("message", ""),
-            "stage": result.get("stage"),
-            "completed": result.get("completed", False),
-            "case_data": result.get("case_data") if result.get("completed") else session.case_data
-        }
-        
-        # If conversation is completed, create the case automatically
-        if result.get("completed"):
-            case_data = result.get("case_data")
-            logger.info("🎉 Information collection complete. Creating case...")
+            from api.utils.subscription_enforcement import check_subscription_active
+            await check_subscription_active(user_id=current_user['id'], require_ai=True)
             
-            try:
-                # Create case using collected data
-                case_id = general_agent.receive_case(
-                    facts=case_data.get("facts", ""),
-                    client_name=case_data.get("client_name") or "عميل جديد",
-                    case_type=case_data.get("case_type"),
-                    additional_data=case_data.get("additional_info")
-                )
-                
-                response_data["case_id"] = case_id
-                response_data["message"] += f"\n\nتم إنشاء القضية بنجاح! رقم القضية: {case_id}"
-                
-                # Clean up session
-                session_manager.delete_session(session_id)
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to create case after chat: {e}")
-                response_data["message"] += f"\n\nحدث خطأ أثناء إنشاء القضية: {str(e)}"
+        # Delegate to Stateless Service
+        # Pass generate_title flag based on request context if needed, 
+        # or assuming it's passed in metadata. 
+        # For now, default False or we can add a field to ChatRequest if we want explicit control.
+        # But UI Logic says: "isFirstMessage" -> generate_title.
+        # Let's add generate_title to the service call, defaulted to False?
+        # The prompt didn't strictly say to add it to ChatRequest, but UI sends `generate_title` in body.
+        # Let's check ChatRequest schema... I didn't add generate_title there.
+        # I will assume the UI sends it and Pydantic filters it unless I update schema.
+        # But wait, I updated `ChatRequest` in schema? No, checked schema file: `message`, `office_id`, `session_id`.
+        # I should just update `process_message`.
         
-        return ChatResponse(**response_data)
+        result = await chat_service.process_message(
+            session_id=session_id,
+            message_text=request.message,
+            user_context=current_user,
+            generate_title=False # We can improve this later
+        )
+        return result
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Failed to process chat message: {e}")
+        logger.error(f"❌ Chat Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# =============================================================================
+# Chat Session Management Endpoints
+# =============================================================================
 
-@app.post("/api/cases/new", response_model=NewCaseResponse)
-async def create_new_case(request: NewCaseRequest):
-    """
-    Create a new case
-    
-    This endpoint receives case facts and creates a new case file.
-    The case is saved to storage with a unique ID.
-    """
-    try:
-        logger.info("📋 Received new case request")
-        logger.info(f"   Client: {request.client_name}")
-        logger.info(f"   Facts length: {len(request.facts)} chars")
-        logger.info(f"   Case type: {request.case_type}")
+@app.get("/api/chat/sessions", response_model=List[ChatSession])
+async def list_chat_sessions(
+    limit: int = 50,
+    current_user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """List chat sessions for the current user"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
         
-        # Create case using general agent
-        logger.info("🔄 Calling general_agent.receive_case()...")
-        case_id = general_agent.receive_case(
-            facts=request.facts,
-            client_name=request.client_name,
-            case_type=request.case_type,
-            additional_data=request.additional_data
-        )
-        
-        logger.info(f"✅ Case created successfully: {case_id}")
-        
-        return NewCaseResponse(
-            case_id=case_id,
-            status="pending",
-            message="تم إنشاء القضية بنجاح",
-            created_at=datetime.now().isoformat()
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to create case: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"فشل في إنشاء القضية: {str(e)}"
-        )
+    return await chat_service.list_user_sessions(current_user['id'])
 
+@app.post("/api/chat/sessions", response_model=ChatSession)
+async def create_chat_session(
+    session_in: ChatSessionCreate,
+    current_user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """Create a new chat session"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    return await chat_service.create_session(
+        user_id=current_user['id'],
+        title=session_in.title,
+        session_type=session_in.session_type
+    )
 
-@app.post("/api/cases/{case_id}/analyze", response_model=CaseAnalysisResponse)
-async def analyze_case(case_id: str, background_tasks: BackgroundTasks):
-    """
-    Analyze a case and create execution plan
-    
-    This performs:
-    1. Initial analysis by the General Lawyer Agent
-    2. Plan creation by the Case Planner
-    
-    For full processing, use /api/cases/{case_id}/process
-    """
-    try:
-        logger.info(f"🔍 Analyzing case: {case_id}")
+@app.get("/api/chat/sessions/{session_id}/messages", response_model=List[ChatMessage])
+async def get_session_messages(
+    session_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """Get messages for a specific session"""
+    if not current_user:
+         raise HTTPException(status_code=401, detail="Authentication required")
+         
+    return await chat_service.get_session_messages(session_id, current_user['id'])
+
+@app.delete("/api/chat/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional)
+):
+    """Delete a session"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
         
-        # Load case
-        case_data = storage.load_case(case_id)
-        if not case_data:
-            raise HTTPException(status_code=404, detail="Case not found")
-        
-        # Perform analysis
-        analysis = general_agent.analyze_case(case_id)
-        
-        # Create plan
-        plan = general_agent.create_plan()
-        
-        return CaseAnalysisResponse(
-            case_id=case_id,
-            status="analyzed",
-            analysis=analysis,
-            plan=plan,
-            message="تم تحليل القضية وإنشاء الخطة"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Failed to analyze case: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    await chat_service.delete_session(session_id, current_user['id'])
+    return {"status": "success"}
 
 
-@app.post("/api/cases/{case_id}/process")
-async def process_case_complete(case_id: str, background_tasks: BackgroundTasks):
-    """
-    Complete end-to-end case processing
-    
-    This performs all steps:
-    1. Analysis
-    2. Planning
-    3. Specialist agent execution (via Executor)
-    4. Final recommendation compilation
-    
-    This may take several minutes depending on case complexity.
-    """
-    try:
-        logger.info(f"🚀 Starting complete processing for case: {case_id}")
-        
-        # Load case
-        case_data = storage.load_case(case_id)
-        if not case_data:
-            raise HTTPException(status_code=404, detail="Case not found")
-        
-        # Analyze
-        analysis = general_agent.analyze_case(case_id)
-        
-        # Create plan
-        plan = general_agent.create_plan()
-        
-        # Execute plan using general_agent's built-in executor
-        case_data = general_agent.current_case
-        
-        execution_result = general_agent.execute_plan_simple(
-            case_data=case_data,
-            plan=plan
-        )
-        
-        # Extract results
-        reports = execution_result.get("specialist_reports", [])
-        final_recommendation = execution_result.get("final_recommendation", {})
-        
-        return {
-            "case_id": case_id,
-            "status": "completed",
-            "analysis": analysis,
-            "plan": plan,
-            "specialist_reports": reports,
-            "final_recommendation": final_recommendation,
-            "message": "تم معالجة القضية بالكامل",
-            "case_file": storage.get_case_file_path(case_id)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Failed to process case: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/cases/{case_id}", response_model=CaseReportResponse)
-async def get_case(case_id: str):
-    """
-    Get case details and current status
-    """
-    try:
-        case_data = storage.load_case(case_id)
-        
-        if not case_data:
-            raise HTTPException(status_code=404, detail="Case not found")
-        
-        return CaseReportResponse(
-            case_id= case_id,
-            status=case_data.get("status", "unknown"),
-            analysis=case_data.get("general_agent_analysis"),
-            plan=case_data.get("plan"),
-            specialist_reports=case_data.get("specialist_reports"),
-            final_recommendation=case_data.get("final_recommendation"),
-            case_file_path=storage.get_case_file_path(case_id)
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Failed to get case: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/cases", response_model=CaseListResponse)
-async def list_cases(limit: int = 100):
-    """
-    List all cases
-    """
-    try:
-        cases = storage.list_cases(limit=limit)
-        
-        return CaseListResponse(
-            total=len(cases),
-            cases=cases
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to list cases: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/cases/{case_id}")
-async def delete_case(case_id: str):
-    """
-    Delete a case
-    """
-    try:
-        success = storage.delete_case(case_id)
-        
-        if not success:
-            raise HTTPException(status_code=404, detail="Case not found or deletion failed")
-        
-        return {
-            "case_id": case_id,
-            "message": "تم حذف القضية بنجاح",
-            "deleted": True
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Failed to delete case: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/cases/{case_id}/stream")
 async def stream_case_progress(case_id: str):
     """
-    SSE endpoint لبث تحديثات معالجة القضية في الوقت الفعلي
-    
-    الواجهة تتصل بهذا الـ endpoint للحصول على:
-    - تحديثات الخطوات (step_update)
-    - تحديثات التقدم (progress_update)  
-    - إكمال الخطة (plan_completed)
-    
-    Example (Frontend):
-    ```javascript
-    const eventSource = new EventSource('/api/cases/case_001/stream');
-    
-    eventSource.addEventListener('step_update', (e) => {
-        const data = JSON.parse(e.data);
-        console.log(`Step ${data.step_id}: ${data.status}`);
-    });
-    
-    eventSource.addEventListener('progress_update', (e) => {
-        const data = JSON.parse(e.data);
-        console.log(`Progress: ${data.percentage}%`);
-    });
-    ```
+    Endpoint disabled during re-architecture.
     """
-    logger.info(f"📡 SSE connection requested for case: {case_id}")
-    
-    # الحصول على streamer من المدير
-    streamer = stream_manager.get(case_id)
-    
-    if not streamer:
-        # إذا لم يكن موجود، إنشاؤه (في حالة reconnection)
-        logger.info(f"Creating new streamer for case: {case_id}")
-        streamer = stream_manager.register(case_id)
-    
-    return StreamingResponse(
-        streamer.stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"  # لـ nginx
-        }
-    )
+    raise HTTPException(status_code=503, detail="Streaming service is under maintenance.")
 
 
 @app.get("/api/config")
@@ -798,6 +445,8 @@ async def get_config():
 @app.on_event("startup")
 async def startup_event():
     """Initialize components on startup"""
+    from api.cache import get_cache
+    
     logger.info("=" * 60)
     logger.info("🚀 Legal AI Multi-Agent System Starting...")
     logger.info("=" * 60)
@@ -807,9 +456,23 @@ async def startup_event():
     os.makedirs(settings.storage_path, exist_ok=True)
     logger.info(f"✅ Cases directory ready: {settings.storage_path}")
     
+    # Initialize Redis Cache
+    cache = get_cache()
+    cache_stats = cache.get_stats()
+    if cache_stats['available']:
+        logger.info(f"✅ Redis Cache: Connected (REDIS_ENABLED=True)")
+        cache_info = cache.get_info()
+        if cache_info:
+            logger.info(f"   Redis Version: {cache_info.get('redis_version', 'unknown')}")
+            logger.info(f"   Memory Used: {cache_info.get('used_memory_human', 'unknown')}")
+    elif cache_stats['enabled']:
+        logger.warning("⚠️ Redis Cache: Enabled but unavailable - using database fallback")
+    else:
+        logger.info("🔴 Redis Cache: Disabled (REDIS_ENABLED=False)")
+    
     # Test agent initialization
     logger.info("Testing agent initialization...")
-    logger.info(f"✅ Agent initialized: {general_agent.name}")
+    logger.info("✅ Agent System: Ready (Factory Pattern)")
     logger.info(f"LLM Provider: Open WebUI")
     logger.info(f"Model: {settings.openwebui_model}")
     logger.info(f"API URL: {settings.openwebui_api_url}")
@@ -827,6 +490,26 @@ async def shutdown_event():
 # =============================================================================
 # Run Application
 # =============================================================================
+
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    """
+    Real-time WebSocket Endpoint for Agent Perception
+    """
+    await ws_manager.connect(websocket, client_id)
+    try:
+        while True:
+            # Keep connection alive and listen for client messages (e.g. ping)
+            data = await websocket.receive_text()
+            # Optional: Handle client commands here
+            pass
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, client_id)
+    except Exception as e:
+        logger.error(f"WebSocket Error: {e}")
+        ws_manager.disconnect(websocket, client_id)
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -51,3 +51,22 @@ tasks/
 # Database
 *.db
 *.sqlite
+
+# Agentic AI
+.agent/
+
+# Archives and Examples
+archive/
+example to learne/
+
+# Generated Reports and Temp Files
+*_REPORT.md
+report_*.md
+audit_report.md
+fix_report.md
+list_files.txt
+debug_output.txt
+implementation_plan.md
+findings.md
+progress.md
+task_plan.md

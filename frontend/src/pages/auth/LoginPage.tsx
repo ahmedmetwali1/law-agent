@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Scale, Mail, Lock, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
@@ -6,10 +6,17 @@ import { useAuth } from '../../contexts/AuthContext'
 
 export function LoginPage() {
     const navigate = useNavigate()
-    const { refreshProfile } = useAuth()
+    const { user, refreshProfile, loading } = useAuth()
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [isLoading, setIsLoading] = useState(false)
+
+    // Redirect if already logged in
+    useEffect(() => {
+        if (!loading && user) {
+            navigate('/dashboard', { replace: true })
+        }
+    }, [user, loading, navigate])
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault()

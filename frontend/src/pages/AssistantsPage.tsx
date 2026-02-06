@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Users, Mail, Lock, UserCheck, UserX, Shield, Eye, EyeOff } from 'lucide-react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { toast } from 'sonner'
+import { Trash2, AlertTriangle } from 'lucide-react'
 
 interface Assistant {
     id: string
@@ -19,16 +20,28 @@ interface Assistant {
 }
 
 export function AssistantsPage() {
-    const { getEffectiveLawyerId, isLawyer } = useAuth()
+    const { getEffectiveLawyerId, isLawyer, isAdmin } = useAuth()
     const [assistants, setAssistants] = useState<Assistant[]>([])
     const [loading, setLoading] = useState(true)
     const [showCreateModal, setShowCreateModal] = useState(false)
+    const [limit, setLimit] = useState<{ current_count: number, max_limit: number } | null>(null)
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
 
     useEffect(() => {
-        if (isLawyer) {
+        if (isLawyer || isAdmin) {
             fetchAssistants()
+            fetchLimit()
         }
-    }, [isLawyer])
+    }, [isLawyer, isAdmin])
+
+    const fetchLimit = async () => {
+        try {
+            const data = await apiClient.get<any>('/api/assistants/limit')
+            setLimit(data)
+        } catch (error) {
+            console.error('Error fetching limit:', error)
+        }
+    }
 
     const fetchAssistants = async () => {
         const lawyerId = getEffectiveLawyerId()
@@ -36,13 +49,7 @@ export function AssistantsPage() {
 
         try {
             setLoading(true)
-            const { data, error } = await supabase
-                .from('users')
-                .select('*, role:roles(*)')
-                .eq('office_id', lawyerId)  // جلب مساعدي المحامي الحالي
-                .order('created_at', { ascending: false })
-
-            if (error) throw error
+            const data = await apiClient.get<Assistant[]>('/api/assistants')
             setAssistants(data || [])
         } catch (error) {
             console.error('Error fetching assistants:', error)
@@ -54,12 +61,9 @@ export function AssistantsPage() {
 
     const toggleAssistantStatus = async (assistantId: string, currentStatus: boolean) => {
         try {
-            const { error } = await supabase
-                .from('users')
-                .update({ is_active: !currentStatus })
-                .eq('id', assistantId)
-
-            if (error) throw error
+            await apiClient.put(`/api/assistants/${assistantId}/toggle-status`, {
+                is_active: !currentStatus
+            })
 
             toast.success(!currentStatus ? 'تم تفعيل المساعد' : 'تم تعطيل المساعد')
             fetchAssistants()
@@ -68,8 +72,20 @@ export function AssistantsPage() {
         }
     }
 
-    // المحامون فقط يمكنهم الوصول
-    if (!isLawyer) {
+    const deleteAssistant = async (id: string) => {
+        try {
+            await apiClient.delete(`/api/assistants/${id}`)
+            toast.success('تم حذف المساعد بنجاح')
+            setShowDeleteConfirm(null)
+            fetchAssistants()
+            fetchLimit()
+        } catch (error) {
+            toast.error('فشل حذف المساعد')
+        }
+    }
+
+    // المحامون والآدمن فقط يمكنهم الوصول
+    if (!isLawyer && !isAdmin) {
         return (
             <div className="text-center py-12">
                 <Shield className="w-16 h-16 text-red-500 mx-auto mb-4" />
@@ -77,7 +93,7 @@ export function AssistantsPage() {
                     غير مصرح
                 </h3>
                 <p className="text-gray-400" style={{ fontFamily: 'Cairo, sans-serif' }}>
-                    هذه الصفحة للمحامين فقط
+                    هذه الصفحة للمحامين والمشرفين فقط
                 </p>
             </div>
         )
@@ -109,7 +125,12 @@ export function AssistantsPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="backdrop-blur-xl bg-obsidian-800/70 border border-gold-500/20 rounded-xl p-6">
                     <h3 className="text-gray-400 text-sm mb-2" style={{ fontFamily: 'Cairo, sans-serif' }}>إجمالي المساعدين</h3>
-                    <p className="text-4xl font-bold text-white">{assistants.length}</p>
+                    <div className="flex items-baseline gap-2">
+                        <p className="text-4xl font-bold text-white">{assistants.length}</p>
+                        {limit && (
+                            <p className="text-gray-500 text-lg">/ {limit.max_limit}</p>
+                        )}
+                    </div>
                 </div>
                 <div className="backdrop-blur-xl bg-obsidian-800/70 border border-green-500/20 rounded-xl p-6">
                     <h3 className="text-gray-400 text-sm mb-2" style={{ fontFamily: 'Cairo, sans-serif' }}>نشط</h3>
@@ -193,9 +214,53 @@ export function AssistantsPage() {
                                 >
                                     {assistant.is_active ? 'تعطيل' : 'تفعيل'}
                                 </button>
+                                <button
+                                    onClick={() => setShowDeleteConfirm(assistant.id)}
+                                    className="p-2 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500/20 transition-colors"
+                                    title="حذف المساعد"
+                                >
+                                    <Trash2 className="w-5 h-5" />
+                                </button>
                             </div>
                         </motion.div>
                     ))}
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {showDeleteConfirm && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="backdrop-blur-xl bg-obsidian-800/95 border border-red-500/30 rounded-2xl p-8 max-w-sm w-full text-center"
+                    >
+                        <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <AlertTriangle className="w-8 h-8 text-red-500" />
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2" style={{ fontFamily: 'Cairo, sans-serif' }}>
+                            تأكيد الحذف
+                        </h2>
+                        <p className="text-gray-400 mb-6" style={{ fontFamily: 'Cairo, sans-serif' }}>
+                            هل أنت متأكد من رغبتك في حذف هذا المساعد؟ لا يمكن التراجع عن هذا الإجراء وسيتم حذف جميع بيانات الدخول الخاصة به.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => deleteAssistant(showDeleteConfirm)}
+                                className="flex-1 px-6 py-3 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 transition-colors"
+                                style={{ fontFamily: 'Cairo, sans-serif' }}
+                            >
+                                حذف
+                            </button>
+                            <button
+                                onClick={() => setShowDeleteConfirm(null)}
+                                className="flex-1 px-6 py-3 bg-obsidian-700 text-white rounded-lg hover:bg-obsidian-600 transition-colors"
+                                style={{ fontFamily: 'Cairo, sans-serif' }}
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </motion.div>
                 </div>
             )}
 
@@ -247,26 +312,14 @@ function CreateAssistantModal({ onClose, onSuccess }: CreateAssistantModalProps)
         setLoading(true)
 
         try {
-            // ✅ FIX: استخدام Backend API لإنشاء المساعد
-            const response = await fetch('http://localhost:8000/api/assistants/create', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-                },
-                body: JSON.stringify({
-                    email: formData.email,
-                    password: formData.password,
-                    full_name: formData.full_name,
-                    phone: formData.phone || null,
-                    office_id: lawyerId
-                })
+            // ✅ FIXED: استخدام apiClient بدلاً من fetch المباشر
+            await apiClient.post('/api/assistants/create', {
+                email: formData.email,
+                password: formData.password,
+                full_name: formData.full_name,
+                phone: formData.phone || null,
+                office_id: lawyerId
             })
-
-            if (!response.ok) {
-                const error = await response.json()
-                throw new Error(error.detail || 'فشل إنشاء المساعد')
-            }
 
             toast.success('تم إضافة المساعد بنجاح')
             onSuccess()

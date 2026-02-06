@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useBreadcrumb } from '../contexts/BreadcrumbContext'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import {
@@ -60,25 +60,17 @@ export function AuditLogPage() {
             const lawyerId = getEffectiveLawyerId()
             if (!lawyerId) return
 
-            let query = supabase
-                .from('audit_logs')
-                .select('*')
-                .eq('lawyer_id', lawyerId)
-                .order('created_at', { ascending: false })
-                .limit(100)
+            // ✅ BFF Pattern: استخدام apiClient
+            // Backend يتولى فلترة lawyer_id
+            const params = new URLSearchParams()
+            if (actionFilter !== 'all') params.append('action', actionFilter)
+            if (tableFilter !== 'all') params.append('table', tableFilter)
 
-            if (actionFilter !== 'all') {
-                query = query.eq('action', actionFilter)
-            }
+            const response = await apiClient.get<{ logs: AuditLog[], count: number }>(
+                `/api/audit/logs${params.toString() ? '?' + params.toString() : ''}`
+            )
 
-            if (tableFilter !== 'all') {
-                query = query.eq('table_name', tableFilter)
-            }
-
-            const { data, error } = await query
-
-            if (error) throw error
-            setLogs(data || [])
+            setLogs(response.logs || [])
         } catch (error: any) {
             console.error('Error fetching audit logs:', error)
             toast.error('فشل تحميل السجل')

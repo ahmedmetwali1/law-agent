@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import { supabase, isConfigured } from '../supabaseClient'
 import { AuthLayout } from '../components/auth/AuthLayout'
+import { useAuth } from '../contexts/AuthContext'
 import { Eye, EyeOff, Loader2, CheckCircle2, Globe } from 'lucide-react'
 
 interface Country {
@@ -17,11 +18,19 @@ interface Country {
 
 export function SignupPage() {
     const navigate = useNavigate()
+    const { user, loading: authLoading } = useAuth()
     const [loading, setLoading] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [showConfirmPassword, setShowConfirmPassword] = useState(false)
     const [countries, setCountries] = useState<Country[]>([])
     const [loadingCountries, setLoadingCountries] = useState(true)
+
+    // Redirect if already logged in
+    useEffect(() => {
+        if (!authLoading && user) {
+            navigate('/dashboard', { replace: true })
+        }
+    }, [user, authLoading, navigate])
 
     const [formData, setFormData] = useState({
         fullName: '',
@@ -51,15 +60,12 @@ export function SignupPage() {
     const fetchCountries = async () => {
         try {
             setLoadingCountries(true)
-            const { data, error } = await supabase
-                .from('countries')
-                .select('*')
-                .eq('is_active', true)
-                .order('name_ar')
+            // ✅ BFF Pattern: Public endpoint (no auth needed)
+            const response = await fetch('http://localhost:8000/api/countries')
+            if (!response.ok) throw new Error('Failed to fetch countries')
 
-            if (error) throw error
-
-            setCountries(data || [])
+            const data: Country[] = await response.json()
+            setCountries(data)
 
             // Auto-select Saudi Arabia if available
             const saudi = data?.find(c => c.code === 'SA')

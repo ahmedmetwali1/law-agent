@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
     User, Lock, Shield, Info, CreditCard, Sparkles, LogOut, FileWarning,
-    Briefcase, FileText, Scale, Users, Gavel, Edit, Save, X
+    Briefcase, FileText, Scale, Users, Gavel, Edit, Save, X, Globe, Upload, Camera
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
+import { supabase } from '../supabaseClient'  // ✅ For password update only (Supabase Auth API)
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 
@@ -25,10 +26,24 @@ export function SettingsPage() {
     const [formData, setFormData] = useState({
         full_name: '',
         email: '',
-        phone_number: '',
+        phone: '',
         license_number: '',
-        specialization: ''
+        specialization: '',
+        bio: '',
+        lawyer_license_type: '',
+        bar_association: '',
+        years_of_experience: 0,
+        languages: [] as string[],
+        website: '',
+        linkedin_profile: '',
+        office_address: '',
+        office_city: '',
+        office_postal_code: '',
+        timezone: 'UTC',
+        profile_image_url: ''
     })
+
+    const [officeLawyer, setOfficeLawyer] = useState<any>(null)
 
     const [passwordData, setPasswordData] = useState({
         currentPassword: '',
@@ -39,24 +54,18 @@ export function SettingsPage() {
     const [showDeleteModal, setShowDeleteModal] = useState(false)
     const [deletePassword, setDeletePassword] = useState('')
     const [deleteConfirmation, setDeleteConfirmation] = useState('')
+    const [isUploading, setIsUploading] = useState(false)
 
     const handleDeleteAccount = async () => {
         if (deleteConfirmation !== "أقر برغبتي في حذف حسابي نهائياً") return
 
         try {
-            const token = localStorage.getItem('access_token')
-            const response = await fetch('http://localhost:8000/api/auth/account', {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ password: deletePassword })
-            })
+            // ✅ Correct Axios DELETE with data
+            const response = await apiClient.delete('/api/auth/account', { data: { password: deletePassword } })
 
-            if (!response.ok) {
-                const data = await response.json()
-                throw new Error(data.detail || 'فشل حذف الحساب')
+            // Backend typically returns the deleted object or a success flag
+            if (!response) {
+                throw new Error('فشل حذف الحساب')
             }
 
             toast.success('تم حذف الحساب بنجاح. وداعاً!')
@@ -72,32 +81,52 @@ export function SettingsPage() {
             setFormData({
                 full_name: profile.full_name || '',
                 email: user?.email || '',
-                phone_number: profile.phone_number || '',
+                phone: profile.phone || profile.phone_number || '', // Handle mapping
                 license_number: profile.license_number || '',
-                specialization: profile.specialization || ''
+                specialization: profile.specialization || '',
+                bio: profile.bio || '',
+                lawyer_license_type: profile.lawyer_license_type || '',
+                bar_association: profile.bar_association || '',
+                years_of_experience: profile.years_of_experience || 0,
+                languages: profile.languages || [],
+                website: profile.website || '',
+                linkedin_profile: profile.linkedin_profile || '',
+                office_address: profile.office_address || '',
+                office_city: profile.office_city || '',
+                office_postal_code: profile.office_postal_code || '',
+                timezone: profile.timezone || 'UTC',
+                profile_image_url: profile.profile_image_url || ''
             })
+
+            if (profile.role?.name === 'assistant' || profile.role_id === 'assistant-role-id-if-needed') {
+                fetchOfficeLawyer()
+            }
         }
         fetchStats()
     }, [profile, user])
+
+    const fetchOfficeLawyer = async () => {
+        try {
+            const data = await apiClient.get('/api/users/office-lawyer')
+            if (data) setOfficeLawyer(data)
+        } catch (error) {
+            console.error('Error fetching office lawyer:', error)
+        }
+    }
 
     const fetchStats = async () => {
         if (!user?.id) return
 
         try {
-            const [cases, clients, tasks, sessions, records] = await Promise.all([
-                supabase.from('cases').select('*', { count: 'exact', head: true }).eq('lawyer_id', user.id),
-                supabase.from('clients').select('*', { count: 'exact', head: true }).eq('lawyer_id', user.id),
-                supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('lawyer_id', user.id),
-                supabase.from('hearings').select('*', { count: 'exact', head: true }).eq('lawyer_id', user.id),
-                supabase.from('police_records').select('*', { count: 'exact', head: true }).eq('lawyer_id', user.id)
-            ])
+            // Fetch account statistics from Backend API
+            const stats = await apiClient.get('/api/settings/account-stats')
 
             setStats({
-                cases: cases.count || 0,
-                clients: clients.count || 0,
-                tasks: tasks.count || 0,
-                sessions: sessions.count || 0,
-                police_records: records.count || 0
+                cases: stats.cases,
+                clients: stats.clients,
+                tasks: stats.tasks,
+                sessions: stats.hearings,
+                police_records: stats.police_records
             })
         } catch (error) {
             console.error('Error fetching stats:', error)
@@ -107,17 +136,25 @@ export function SettingsPage() {
     const handleUpdateProfile = async (e: React.FormEvent) => {
         e.preventDefault()
         try {
-            const { error } = await supabase
-                .from('users')
-                .update({
-                    full_name: formData.full_name,
-                    phone: formData.phone_number, // ✅ Map phone_number -> phone for DB
-                    license_number: formData.license_number,
-                    specialization: formData.specialization
-                })
-                .eq('id', user?.id)
-
-            if (error) throw error
+            // ✅ BFF Pattern: استخدام apiClient
+            await apiClient.put('/api/settings/profile', {
+                full_name: formData.full_name,
+                phone: formData.phone,
+                license_number: formData.license_number,
+                specialization: formData.specialization,
+                bio: formData.bio,
+                lawyer_license_type: formData.lawyer_license_type,
+                bar_association: formData.bar_association,
+                years_of_experience: formData.years_of_experience,
+                languages: formData.languages,
+                website: formData.website,
+                linkedin_profile: formData.linkedin_profile,
+                office_address: formData.office_address,
+                office_city: formData.office_city,
+                office_postal_code: formData.office_postal_code,
+                timezone: formData.timezone,
+                profile_image_url: formData.profile_image_url
+            })
 
             await refreshProfile()
             setIsEditing(false)
@@ -125,6 +162,46 @@ export function SettingsPage() {
         } catch (error) {
             console.error('Error updating profile:', error)
             toast.error('فشل تحديث البيانات')
+        }
+    }
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0]
+        if (!file || !user) return
+
+        try {
+            setIsUploading(true)
+
+            // ✅ Use FormData for file upload to server
+            const formData = new FormData()
+            formData.append('file', file)
+
+            // ✅ Upload to our local server endpoint
+            const response = await apiClient.post('/api/settings/upload-profile-image', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
+            })
+
+            if (!response || !response.publicUrl) {
+                throw new Error('فشل استلام رابط الصورة من الخادم')
+            }
+
+            const publicUrl = response.publicUrl
+
+            // Update local state
+            setFormData(prev => ({ ...prev, profile_image_url: publicUrl }))
+
+            // Auto-save the URL to profile
+            await apiClient.put('/api/settings/profile', { profile_image_url: publicUrl })
+            await refreshProfile()
+
+            toast.success('تم رفع الصورة بنجاح')
+        } catch (error: any) {
+            console.error('Upload error:', error)
+            toast.error('فشل رفع الصورة: ' + (error.response?.data?.detail || error.message))
+        } finally {
+            setIsUploading(false)
         }
     }
 
@@ -213,10 +290,38 @@ export function SettingsPage() {
 
                             <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
                                 <div className="flex items-center gap-6">
-                                    <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 p-[2px]">
-                                        <div className="w-full h-full rounded-full bg-obsidian-900 flex items-center justify-center">
-                                            <User className="w-10 h-10 text-gold-500" />
+                                    <div className="relative group">
+                                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 p-[2px] shadow-xl overflow-hidden">
+                                            <div className="w-full h-full rounded-full bg-obsidian-900 flex items-center justify-center overflow-hidden">
+                                                {formData.profile_image_url ? (
+                                                    <img
+                                                        src={formData.profile_image_url.startsWith('/')
+                                                            ? (import.meta.env.VITE_API_URL || 'http://localhost:8000') + formData.profile_image_url
+                                                            : formData.profile_image_url}
+                                                        alt="Profile"
+                                                        className="w-full h-full object-cover transition-transform group-hover:scale-110"
+                                                    />
+                                                ) : (
+                                                    <User className="w-10 h-10 text-gold-500" />
+                                                )}
+                                            </div>
                                         </div>
+                                        {isEditing && (
+                                            <label className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    className="hidden"
+                                                    onChange={handleImageUpload}
+                                                    disabled={isUploading}
+                                                />
+                                                {isUploading ? (
+                                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                                                ) : (
+                                                    <Camera className="w-6 h-6 text-white" />
+                                                )}
+                                            </label>
+                                        )}
                                     </div>
                                     <div>
                                         <h2 className="text-3xl font-bold text-white mb-2 font-cairo">
@@ -275,92 +380,269 @@ export function SettingsPage() {
                             </div>
                         </div>
 
-                        {/* Profile Form */}
+                        {/* Full Profile Form */}
                         <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="grid md:grid-cols-2 gap-8"
+                            className="space-y-8"
                         >
-                            {/* Personal Info */}
-                            <div className="space-y-6">
-                                <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
-                                    <Info className="w-5 h-5 text-blue-500" />
-                                    المعلومات الشخصية
-                                </h3>
-                                <div className="glass-card p-6 space-y-4">
-                                    <div>
-                                        <label className="text-sm text-gray-400 block mb-2">الاسم الكامل</label>
-                                        <div className="relative">
-                                            <User className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
-                                            <input
-                                                disabled={!isEditing}
-                                                type="text"
-                                                value={formData.full_name}
-                                                onChange={e => setFormData({ ...formData, full_name: e.target.value })}
-                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
-                                            />
-                                        </div>
+                            {/* Assistant Banner */}
+                            {officeLawyer && (
+                                <div className="bg-cobalt-500/10 border border-cobalt-500/30 rounded-2xl p-6 flex items-center gap-4 animate-in fade-in slide-in-from-top-4">
+                                    <div className="w-12 h-12 rounded-full bg-cobalt-500 flex items-center justify-center">
+                                        <Users className="w-6 h-6 text-white" />
                                     </div>
                                     <div>
-                                        <label className="text-sm text-gray-400 block mb-2">البريد الإلكتروني</label>
-                                        <div className="relative">
-                                            <div className="absolute right-3 top-3 w-5 h-5 text-gray-500">@</div>
-                                            <input
-                                                disabled={true}
-                                                type="email"
-                                                value={formData.email}
-                                                className="w-full bg-obsidian-900/50 border border-gray-800 rounded-xl py-3 pr-10 pl-4 text-gray-400 cursor-not-allowed"
-                                            />
-                                        </div>
+                                        <p className="text-gray-400 text-sm font-cairo">أنت مسجل كمساعد قانوني للمحامي:</p>
+                                        <p className="text-xl font-bold text-white font-cairo">{officeLawyer.full_name}</p>
                                     </div>
-                                    <div>
-                                        <label className="text-sm text-gray-400 block mb-2">رقم الهاتف</label>
-                                        <div className="relative">
-                                            <Briefcase className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
-                                            <input
-                                                disabled={!isEditing}
-                                                type="text"
-                                                value={formData.phone_number || ''}
-                                                onChange={e => setFormData({ ...formData, phone_number: e.target.value })}
-                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
-                                                dir="ltr"
-                                                placeholder="+966..."
-                                            />
+                                </div>
+                            )}
+
+                            <div className="grid md:grid-cols-2 gap-8">
+                                {/* Personal Info */}
+                                <div className="space-y-6">
+                                    <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
+                                        <Info className="w-5 h-5 text-blue-500" />
+                                        المعلومات الشخصية والاتصال
+                                    </h3>
+                                    <div className="glass-card p-6 space-y-4">
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">الاسم الكامل</label>
+                                            <div className="relative">
+                                                <User className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="text"
+                                                    value={formData.full_name}
+                                                    onChange={e => setFormData({ ...formData, full_name: e.target.value })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">البريد الإلكتروني</label>
+                                            <div className="relative">
+                                                <div className="absolute right-3 top-3 w-5 h-5 text-gray-500 text-center leading-tight">@</div>
+                                                <input
+                                                    disabled={true}
+                                                    type="email"
+                                                    value={formData.email}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-800 rounded-xl py-3 pr-10 pl-4 text-gray-400 cursor-not-allowed"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">رقم الهاتف</label>
+                                            <div className="relative">
+                                                <Briefcase className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="text"
+                                                    value={formData.phone}
+                                                    onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
+                                                    dir="ltr"
+                                                    placeholder="+966..."
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">الصورة الشخصية</label>
+                                            <div className="flex gap-2">
+                                                <div className="relative flex-1">
+                                                    <Camera className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
+                                                    <input
+                                                        disabled={!isEditing}
+                                                        type="text"
+                                                        value={formData.profile_image_url}
+                                                        onChange={e => setFormData({ ...formData, profile_image_url: e.target.value })}
+                                                        className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all text-sm"
+                                                        placeholder="رابط الصورة (URL)..."
+                                                        dir="ltr"
+                                                    />
+                                                </div>
+                                                <label className={`px-4 py-3 bg-obsidian-800 border border-gray-700 rounded-xl cursor-pointer hover:bg-obsidian-700 transition-colors flex items-center gap-2 ${!isEditing ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                                    <input
+                                                        disabled={!isEditing || isUploading}
+                                                        type="file"
+                                                        accept="image/*"
+                                                        className="hidden"
+                                                        onChange={handleImageUpload}
+                                                    />
+                                                    {isUploading ? (
+                                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gold-500"></div>
+                                                    ) : (
+                                                        <Upload className="w-4 h-4 text-gold-500" />
+                                                    )}
+                                                    <span className="text-xs text-white whitespace-nowrap">رفع ملف</span>
+                                                </label>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            {/* Professional Info */}
-                            <div className="space-y-6">
-                                <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
-                                    <Briefcase className="w-5 h-5 text-gold-500" />
-                                    المعلومات المهنية
-                                </h3>
-                                <div className="glass-card p-6 space-y-4">
-                                    <div>
-                                        <label className="text-sm text-gray-400 block mb-2">رقم الترخيص</label>
-                                        <div className="relative">
-                                            <Shield className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
+                                {/* Professional Info */}
+                                <div className="space-y-6">
+                                    <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
+                                        <Briefcase className="w-5 h-5 text-gold-500" />
+                                        المعلومات المهنية والتراخيص
+                                    </h3>
+                                    <div className="glass-card p-6 space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm text-gray-400 block mb-2">رقم الترخيص</label>
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="text"
+                                                    value={formData.license_number}
+                                                    onChange={e => setFormData({ ...formData, license_number: e.target.value })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-mono"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-sm text-gray-400 block mb-2">سنوات الخبرة</label>
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="number"
+                                                    value={formData.years_of_experience}
+                                                    onChange={e => setFormData({ ...formData, years_of_experience: parseInt(e.target.value) || 0 })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">درجة الترخيص</label>
                                             <input
                                                 disabled={!isEditing}
                                                 type="text"
-                                                value={formData.license_number}
-                                                onChange={e => setFormData({ ...formData, license_number: e.target.value })}
-                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-mono"
+                                                value={formData.lawyer_license_type}
+                                                onChange={e => setFormData({ ...formData, lawyer_license_type: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                                placeholder="مثال: ممارس، نقض، إلخ..."
                                             />
                                         </div>
-                                    </div>
-                                    <div>
-                                        <label className="text-sm text-gray-400 block mb-2">التخصص</label>
-                                        <div className="relative">
-                                            <Scale className="absolute right-3 top-3 w-5 h-5 text-gray-500" />
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">النقابة / الهيئة المهنية</label>
+                                            <input
+                                                disabled={!isEditing}
+                                                type="text"
+                                                value={formData.bar_association}
+                                                onChange={e => setFormData({ ...formData, bar_association: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                                placeholder="مثال: الهيئة السعودية للمحامين"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">التخصص الرئيسي</label>
                                             <input
                                                 disabled={!isEditing}
                                                 type="text"
                                                 value={formData.specialization}
                                                 onChange={e => setFormData({ ...formData, specialization: e.target.value })}
-                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 pr-10 pl-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Office & Location */}
+                                <div className="space-y-6">
+                                    <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
+                                        <Gavel className="w-5 h-5 text-emerald-500" />
+                                        معلومات المكتب والموقع
+                                    </h3>
+                                    <div className="glass-card p-6 space-y-4">
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">عنوان المكتب</label>
+                                            <input
+                                                disabled={!isEditing}
+                                                type="text"
+                                                value={formData.office_address}
+                                                onChange={e => setFormData({ ...formData, office_address: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                                placeholder="الشارع، الحي..."
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm text-gray-400 block mb-2">المدينة</label>
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="text"
+                                                    value={formData.office_city}
+                                                    onChange={e => setFormData({ ...formData, office_city: e.target.value })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-sm text-gray-400 block mb-2">الرمز البريدي</label>
+                                                <input
+                                                    disabled={!isEditing}
+                                                    type="text"
+                                                    value={formData.office_postal_code}
+                                                    onChange={e => setFormData({ ...formData, office_postal_code: e.target.value })}
+                                                    className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">المنطقة الزمنية</label>
+                                            <select
+                                                disabled={!isEditing}
+                                                value={formData.timezone}
+                                                onChange={e => setFormData({ ...formData, timezone: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all"
+                                            >
+                                                <option value="Asia/Riyadh">Asia/Riyadh (GMT+3)</option>
+                                                <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
+                                                <option value="Africa/Cairo">Africa/Cairo (GMT+2)</option>
+                                                <option value="UTC">UTC</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Online Presence & Bio */}
+                                <div className="space-y-6">
+                                    <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-4">
+                                        <Globe className="w-5 h-5 text-cobalt-400" />
+                                        الحضور الرقمي والنبذة
+                                    </h3>
+                                    <div className="glass-card p-6 space-y-4">
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">الموقع الإلكتروني</label>
+                                            <input
+                                                disabled={!isEditing}
+                                                type="url"
+                                                value={formData.website}
+                                                onChange={e => setFormData({ ...formData, website: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all text-sm"
+                                                placeholder="https://..."
+                                                dir="ltr"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">LinkedIn</label>
+                                            <input
+                                                disabled={!isEditing}
+                                                type="url"
+                                                value={formData.linkedin_profile}
+                                                onChange={e => setFormData({ ...formData, linkedin_profile: e.target.value })}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all text-sm"
+                                                placeholder="https://linkedin.com/in/..."
+                                                dir="ltr"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm text-gray-400 block mb-2">نبذة تعريفية</label>
+                                            <textarea
+                                                disabled={!isEditing}
+                                                value={formData.bio}
+                                                onChange={e => setFormData({ ...formData, bio: e.target.value })}
+                                                rows={4}
+                                                className="w-full bg-obsidian-900/50 border border-gray-700 rounded-xl py-3 px-4 text-white focus:border-gold-500/50 disabled:opacity-50 transition-all font-cairo resize-none"
+                                                placeholder="اكتب نبذة عن خبراتك ومجالات عملك..."
                                             />
                                         </div>
                                     </div>

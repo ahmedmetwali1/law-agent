@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { toast } from 'sonner'
 import {
     Plus, Search, Filter, FileText, Trash2, Edit, AlertCircle, Eye, Paperclip
@@ -57,25 +57,9 @@ export function PoliceRecordsPage() {
 
     const fetchRecords = async () => {
         try {
-            const lawyerId = getEffectiveLawyerId() // ✅ Get strict lawyer ID
-            if (!lawyerId) return
-
-            let query = supabase
-                .from('police_records')
-                .select(`
-                    *,
-                    case:cases(case_number)
-                `)
-                .eq('user_id', lawyerId) // ✅ KILLER FILTER: Only specific lawyer records
-                .order('created_at', { ascending: false })
-
-            if (searchQuery) {
-                query = query.or(`record_number.ilike.%${searchQuery}%,police_station.ilike.%${searchQuery}%,complainant_name.ilike.%${searchQuery}%,accused_name.ilike.%${searchQuery}%`)
-            }
-
-            const { data, error } = await query
-
-            if (error) throw error
+            // ✅ BFF Pattern: استخدام apiClient - Backend يتولى فلترة lawyer_id
+            const params = searchQuery ? `?search=${encodeURIComponent(searchQuery)}` : ''
+            const data = await apiClient.get<PoliceRecord[]>(`/api/police-records${params}`)
             setRecords(data || [])
         } catch (error) {
             console.error('Error fetching records:', error)
@@ -88,16 +72,8 @@ export function PoliceRecordsPage() {
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault()
         try {
-            const lawyerId = getEffectiveLawyerId() // ✅ Assign to Lawyer, not valid user
-
-            const { error } = await supabase
-                .from('police_records')
-                .insert([{
-                    ...formData,
-                    user_id: lawyerId
-                }])
-
-            if (error) throw error
+            // ✅ BFF Pattern: Backend يتولى تعيين user_id من JWT وتسجيل التدقيق
+            await apiClient.post('/api/police-records', formData)
 
             toast.success('تم إضافة المحضر بنجاح')
             setIsCreateModalOpen(false)
@@ -123,12 +99,8 @@ export function PoliceRecordsPage() {
         if (!selectedRecord) return
 
         try {
-            const { error } = await supabase
-                .from('police_records')
-                .update(formData)
-                .eq('id', selectedRecord.id)
-
-            if (error) throw error
+            // ✅ BFF Pattern: Backend يتولى التحقق من الملكية وتسجيل التدقيق
+            await apiClient.put(`/api/police-records/${selectedRecord.id}`, formData)
 
             toast.success('تم تحديث المحضر بنجاح')
             setIsEditModalOpen(false)
@@ -143,12 +115,8 @@ export function PoliceRecordsPage() {
         if (!confirm('هل أنت متأكد من حذف هذا المحضر؟')) return
 
         try {
-            const { error } = await supabase
-                .from('police_records')
-                .delete()
-                .eq('id', id)
-
-            if (error) throw error
+            // ✅ BFF Pattern: Backend يتولى التحقق من الملكية وتسجيل التدقيق
+            await apiClient.delete(`/api/police-records/${id}`)
 
             toast.success('تم حذف المحضر')
             fetchRecords()

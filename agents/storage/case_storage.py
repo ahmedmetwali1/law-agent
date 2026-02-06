@@ -20,202 +20,118 @@ logger = logging.getLogger(__name__)
 
 class CaseStorage:
     """
-    Case Storage Manager
-    إدارة حفظ ملفات القضايا
+    Case Storage Manager (Database Only)
+    إدارة حفظ ملفات القضايا (قاعدة البيانات فقط)
     """
     
-    def __init__(self, use_supabase: bool = None):
+    def __init__(self, use_supabase: bool = True):
         """
         Initialize case storage
-        
-        Args:
-            use_supabase: Use Supabase storage if True, local filesystem if False.
-                         If None, uses settings.use_supabase_storage
         """
-        # Use setting if not explicitly specified
-        if use_supabase is None:
-            self.use_supabase = settings.use_supabase_storage
-        else:
-            self.use_supabase = use_supabase
-            
+        self.use_supabase = use_supabase
+        self.client = db.client # Use global client
+        
+        # Setup local storage path if needed
+        self.local_storage_dir = Path("data/cases")
+        if not self.use_supabase:
+             self.local_storage_dir.mkdir(parents=True, exist_ok=True)
+             
+        # Setup supabase config
         self.bucket_name = settings.cases_bucket
-        self.storage_path = settings.storage_path
-        
-        # Always initialize local storage dir for fallback
-        self.local_storage_dir = Path("e:/law/cases")
-        self.local_storage_dir.mkdir(parents=True, exist_ok=True)
-        
-        if self.use_supabase:
-            logger.info(f"☁️ Using Supabase storage: {self.bucket_name} (with local fallback)")
-        else:
-            logger.info(f"📁 Using local storage: {self.local_storage_dir}")
+        self.storage_path = "cases/"
+             
+        logger.info(f"✅ CaseStorage initialized (Mode: {'Supabase' if use_supabase else 'Local'})")
     
     def save_case(self, case_data: Dict[str, Any]) -> str:
         """
-        Save case to storage
+        Save case to Database (Upsert)
         
         Args:
             case_data: Complete case data dictionary
             
         Returns:
-            File path or URL
+            Case ID
         """
-        case_id = case_data.get("case_id")
+        case_id = case_data.get("case_id") or case_data.get("id")
         if not case_id:
             raise ValueError("Case data must include 'case_id'")
         
-        # Add timestamp
-        case_data["last_updated"] = datetime.now().isoformat()
+        # Ensure updated_at
+        case_data["updated_at"] = datetime.now().isoformat()
+        if "created_at" not in case_data:
+             case_data["created_at"] = datetime.now().isoformat()
+
+        # Prepare DB Payload (Map fields if necessary)
+        # Assuming case_data structure matches DB schema or is a superset
+        # We need to extract columns that exist in the table
         
-        # Convert to JSON
-        json_data = json.dumps(case_data, ensure_ascii=False, indent=2)
+        db_data = {
+            "id": case_id,
+            "client_id": case_data.get("client_id"),
+            "lawyer_id": case_data.get("lawyer_id"),
+            "case_number": case_data.get("case_number"),
+            "court_name": case_data.get("court_name"),
+            "case_type": case_data.get("case_type"),
+            "status": case_data.get("status", "pending"),
+            "subject": case_data.get("subject"),
+            "description": case_data.get("description") or case_data.get("facts"), # Map 'facts' to description if needed
+            "metadata": case_data.get("metadata", {}), # Store extra fields in JSONB
+            "updated_at": case_data["updated_at"]
+        }
         
-        # Save based on storage type
-        if self.use_supabase:
-            result = self._save_to_supabase(case_id, json_data)
-        else:
-            result = self._save_to_local(case_id, json_data)
-            
-        # ALWAYS try to sync metadata to DB for relational integrity (Hearings keys)
+        # If 'facts' is passed and not description, ensure it's saved
+        if not db_data["description"] and "facts" in case_data:
+             db_data["description"] = case_data["facts"]
+
         try:
-            self._sync_to_db(case_data)
-        except Exception as e:
-            logger.error(f"⚠️ Failed to sync case to DB: {e}")
-            
-        return result
-    
-    def _sync_to_db(self, case_data: Dict[str, Any]):
-        """Sync case metadata to Supabase DB table"""
-        try:
-            from ..config.database import db
             from ..config.settings import TableNames
             
-            db_data = {
-                "id": case_data.get("case_id"),
-                "client_id": case_data.get("client_id"),
-                "case_number": case_data.get("case_number"),
-                "court_name": case_data.get("court_name"),
-                "case_type": case_data.get("case_type"),
-                "status": case_data.get("status"),
-                "updated_at": datetime.now().isoformat()
-            }
-            
             # Upsert into cases table
-            db.client.table(TableNames.CASES).upsert(db_data).execute()
-            logger.info(f"✅ Synced case metadata to DB: {case_data.get('case_id')}")
+            result = self.client.table(TableNames.CASES).upsert(db_data).execute()
             
-        except ImportError:
-            pass
+            if result.data:
+                logger.info(f"✅ Saved case to DB: {case_id}")
+                return case_id
+            
+            raise Exception("No data returned from upsert")
+            
         except Exception as e:
+            logger.error(f"❌ Failed to save case to DB: {e}")
             raise e
-
-    def _save_to_supabase(self, case_id: str, json_data: str) -> str:
-        """Save to Supabase storage"""
-        try:
-            file_path = f"{self.storage_path}{case_id}.json"
-            
-            # Upload to Supabase
-            bucket = db.get_bucket(self.bucket_name)
-            
-            # Check if file exists and update or create
-            try:
-                # Try to update existing file
-                bucket.update(
-                    path=file_path,
-                    file=json_data.encode('utf-8'),
-                    file_options={"content-type": "application/json"}
-                )
-                logger.info(f"✅ Updated case in Supabase: {file_path}")
-            except:
-                # File doesn't exist, create it
-                bucket.upload(
-                    path=file_path,
-                    file=json_data.encode('utf-8'),
-                    file_options={"content-type": "application/json"}
-                )
-                logger.info(f"✅ Created case in Supabase: {file_path}")
-            
-            return file_path
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to save to Supabase: {e}")
-            # Fallback to local
-            logger.warning("⚠️ Falling back to local storage")
-            return self._save_to_local(case_id, json_data)
-    
-    def _save_to_local(self, case_id: str, json_data: str) -> str:
-        """Save to local filesystem"""
-        try:
-            file_path = self.local_storage_dir / f"{case_id}.json"
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(json_data)
-            
-            logger.info(f"✅ Saved case locally: {file_path}")
-            return str(file_path)
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to save locally: {e}")
-            raise
     
     def load_case(self, case_id: str) -> Optional[Dict[str, Any]]:
         """
-        Load case from storage
-        
-        Args:
-            case_id: Case ID to load
-            
-        Returns:
-            Case data dictionary or None if not found
+        Load case from Database
         """
-        if self.use_supabase:
-            case_data = self._load_from_supabase(case_id)
-            if case_data:
-                return case_data
-            # Fallback to local
-            logger.warning("⚠️ Not found in Supabase, trying local...")
-        
-        return self._load_from_local(case_id)
-    
-    def _load_from_supabase(self, case_id: str) -> Optional[Dict[str, Any]]:
-        """Load from Supabase storage"""
         try:
-            file_path = f"{self.storage_path}{case_id}.json"
+            from ..config.settings import TableNames
             
-            bucket = db.get_bucket(self.bucket_name)
-            response = bucket.download(file_path)
-            
-            if response:
-                json_data = response.decode('utf-8')
-                case_data = json.loads(json_data)
-                logger.info(f"✅ Loaded case from Supabase: {case_id}")
-                return case_data
-            else:
-                logger.warning(f"⚠️ Case not found in Supabase: {case_id}")
-                return None
+            response = self.client.table(TableNames.CASES)\
+                .select("*, clients(full_name)")\
+                .eq("id", case_id)\
+                .single()\
+                .execute()
+                
+            if response.data:
+                # Normalize data structure to match expected "Case Data" format
+                data = response.data
+                data["case_id"] = data["id"]
+                data["client_name"] = data.get("clients", {}).get("full_name")
+                logger.info(f"✅ Loaded case from DB: {case_id}")
+                return data
+                
+            logger.warning(f"⚠️ Case not found: {case_id}")
+            return None
                 
         except Exception as e:
-            logger.error(f"❌ Failed to load from Supabase: {e}")
+            logger.error(f"❌ Failed to load case from DB: {e}")
             return None
-    
-    def _load_from_local(self, case_id: str) -> Optional[Dict[str, Any]]:
-        """Load from local filesystem"""
-        try:
-            file_path = self.local_storage_dir / f"{case_id}.json"
-            
-            if not file_path.exists():
-                logger.warning(f"⚠️ Case not found locally: {case_id}")
-                return None
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                case_data = json.load(f)
-            
-            logger.info(f"✅ Loaded case from local: {case_id}")
-            return case_data
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load locally: {e}")
-            return None
+
+    # Legacy methods for compatibility (Redirect to DB methods)
+    def _save_to_supabase(self, *args): pass
+    def _save_to_local(self, *args): pass
+    def _load_from_supabase(self, *args): return None
+    def _load_from_local(self, *args): return None
     
     def update_case_status(self, case_id: str, status: str) -> bool:
         """
@@ -358,6 +274,39 @@ class CaseStorage:
         """Alias for load_case to match tool expectations"""
         return self.load_case(case_id)
 
+    def get_case_by_id(self, case_id: str, lawyer_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific case by ID with ownership verification
+        
+        Args:
+            case_id: Case ID
+            lawyer_id: Lawyer ID for ownership check
+            
+        Returns:
+            Case data or None if not found/unauthorized
+        """
+        if self.use_supabase:
+            try:
+                from ..config.settings import TableNames
+                
+                response = db.client.table(TableNames.CASES)\
+                    .select("*, clients(full_name)")\
+                    .eq("id", case_id)\
+                    .eq("lawyer_id", lawyer_id)\
+                    .single()\
+                    .execute()
+                    
+                return response.data if response.data else None
+            except Exception as e:
+                logger.error(f"❌ Failed to get case by ID: {e}")
+                return None
+        else:
+            # Local fallback - load and verify
+            case = self.load_case(case_id)
+            if case and case.get("lawyer_id") == lawyer_id:
+                return case
+            return None
+
     def get_cases_by_client(self, client_id: str) -> List[Dict[str, Any]]:
         """
         Get all cases for a specific client
@@ -447,5 +396,100 @@ class CaseStorage:
         else:
             return str(self.local_storage_dir / f"{case_id}.json")
 
+
+
+    def get_cases_by_lawyer(self, lawyer_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get all cases for a specific lawyer from DB
+        
+        Args:
+            lawyer_id: Lawyer UUID
+            limit: Max results
+            
+        Returns:
+            List of cases with client details
+        """
+        if self.use_supabase:
+            try:
+                from ..config.settings import TableNames
+                
+                # Query DB table directly for relational data
+                response = db.client.table(TableNames.CASES)\
+                    .select("*, clients(full_name)")\
+                    .eq("lawyer_id", lawyer_id)\
+                    .order("created_at", desc=True)\
+                    .limit(limit)\
+                    .execute()
+                    
+                return response.data if response.data else []
+            except Exception as e:
+                logger.error(f"❌ Failed to get lawyer cases from DB: {e}")
+                return []
+        else:
+            # Local storage fallback (no lawyer_id filtering really possible efficiently without metadata index)
+            # Just return all local cases
+            return self.list_cases(limit)
+
+    def create_case_in_db(self, case_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a case directly in the DB
+        
+        Args:
+            case_data: Case data dictionary
+            
+        Returns:
+            Created case data
+        """
+        if self.use_supabase:
+            try:
+                from ..config.settings import TableNames
+                
+                # Ensure updated_at is set
+                if "updated_at" not in case_data:
+                    case_data["updated_at"] = datetime.now().isoformat()
+                    
+                response = db.client.table(TableNames.CASES)\
+                    .insert(case_data)\
+                    .select()\
+                    .single()\
+                    .execute()
+                    
+                if response.data:
+                    logger.info(f"✅ Created case in DB: {response.data.get('id')}")
+                    return response.data
+                raise Exception("No data returned from insert")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to create case in DB: {e}")
+                raise e
+        else:
+            # Local fallback - creates JSON file
+            self.save_case(case_data)
+            return case_data
+
+    def search_cases(self, lawyer_id: str, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search cases for a lawyer
+        """
+        if self.use_supabase:
+            try:
+                from ..config.settings import TableNames
+                
+                # Search case_number, subject, court_name
+                # Note: Supabase 'or' syntax: "col1.ilike.%q%,col2.ilike.%q%"
+                or_query = f"case_number.ilike.%{query}%,subject.ilike.%{query}%,court_name.ilike.%{query}%"
+                
+                response = db.client.table(TableNames.CASES)\
+                    .select("*, clients(full_name)")\
+                    .eq("lawyer_id", lawyer_id)\
+                    .or_(or_query)\
+                    .limit(limit)\
+                    .execute()
+                    
+                return response.data if response.data else []
+            except Exception as e:
+                logger.error(f"❌ Failed to search cases: {e}")
+                return []
+        return []
 
 __all__ = ["CaseStorage"]

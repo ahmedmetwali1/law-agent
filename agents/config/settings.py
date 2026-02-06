@@ -22,17 +22,21 @@ class Settings(BaseSettings):
     supabase_url: str = Field(default="", env="SUPABASE_URL")
     supabase_anon_key: str = Field(default="", env="SUPABASE_ANON_KEY")
     supabase_service_role_key: str = Field(default="", env="SUPABASE_SERVICE_ROLE_KEY")
+    database_url: str = Field(default="postgresql://postgres:postgres@localhost:5432/postgres", env="DATABASE_URL")
     
     # Open WebUI Configuration
     openwebui_api_url: str = Field(default="http://localhost:11434", env="OPENWEBUI_API_URL") 
     openwebui_api_key: str = Field(default="", env="OPENWEBUI_API_KEY")
-    openwebui_model: str = Field(default="llama3.1:latest", env="OPENWEBUI_MODEL")
+    openwebui_model: str = Field(default="qwen-coder", env="OPENWEBUI_MODEL")
+    openwebui_models: str = Field(default="", env="OPENWEBUI_MODELS") # Comma separated list
+    lite_model_name: str = Field(default="gpt-4o-mini", env="LITE_MODEL_NAME") # Cost-optimized model
     
     # Backward compatibility
     ai_provider: str = Field(default="openwebui", env="AI_PROVIDER")
     
     # Embedding Configuration
     embedding_provider: str = Field(default="openwebui", env="EMBEDDING_PROVIDER")
+    embedding_api_url: Optional[str] = Field(default=None, env="EMBEDDING_API_URL")
     openai_api_key: str = Field(default="", env="OPENAI_API_KEY")  # For embeddings only if needed
     embedding_model: str = Field(default="bge-m3-embeddings", env="EMBEDDING_MODEL")
     openwebui_embedding_model: str = Field(default="bge-m3-embeddings", env="OPENWEBUI_EMBEDDING_MODEL")
@@ -52,10 +56,27 @@ class Settings(BaseSettings):
     storage_path: str = Field(default="./cases", env="STORAGE_PATH")
     use_supabase_storage: bool = Field(default=False, env="USE_SUPABASE_STORAGE")
     
+    # Local Storage Directories (relative to project root)
+    local_cases_dir: str = Field(
+        default="cases",
+        env="LOCAL_CASES_DIR",
+        description="Local directory for case storage fallback"
+    )
+    local_tasks_dir: str = Field(
+        default="tasks",
+        env="LOCAL_TASKS_DIR",
+        description="Local directory for task storage"
+    )
+    
     # Server Configuration
     host: str = Field(default="0.0.0.0", env="HOST")
     port: int = Field(default=8000, env="PORT")
     debug: bool = Field(default=True, env="DEBUG")
+
+    # JWT Authentication
+    jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")  # Required field (no default)
+    jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
+    jwt_expire_minutes: int = Field(default=1440, env="JWT_EXPIRE_MINUTES")
 
 
 # Global settings instance

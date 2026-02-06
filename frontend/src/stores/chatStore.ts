@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+// --- Interfaces ---
+
 export interface TaskSchema {
     task_type: string
     status: 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -11,14 +13,27 @@ export interface TaskSchema {
     }>
 }
 
+export interface MonologueEntry {
+    id: string
+    agent: string // Strategist, Auditor...
+    content: string
+    timestamp: Date
+}
+
 export interface Message {
     id: string
     role: 'user' | 'assistant'
     content: string
-    thoughts?: string[] // For thinking steps
     taskJson?: TaskSchema
     timestamp: Date
-    isComplete?: boolean  // Track if message finished typing
+    isComplete?: boolean
+}
+
+export interface ActivityState {
+    stage: 'ROUTING' | 'INVESTIGATING' | 'DELIBERATING' | 'VERDICT' | 'IDLE'
+    actor: string
+    action: string
+    isThinking: boolean
 }
 
 interface ChatState {
@@ -27,13 +42,19 @@ interface ChatState {
     currentRoute: string
     abortController: AbortController | null
 
-    sendMessage: (content: string) => Promise<void>
+    // Vital V3.0 State
+    currentActivity: ActivityState
+    councilSession: {
+        activeAgents: string[]
+        monologues: MonologueEntry[]
+    }
+
+    sendMessage: (content: string, options?: { session_id?: string }) => Promise<void>
     stopGeneration: () => void
     addMessage: (message: Message) => void
-    markMessageComplete: (messageId: string) => void
-    updateTaskStatus: (messageId: string, taskJson: TaskSchema) => void
     clearChat: () => void
     setRoute: (route: string) => void
+    resetActivity: () => void
 }
 
 export const useChatStore = create<ChatState>()(
@@ -44,38 +65,62 @@ export const useChatStore = create<ChatState>()(
             currentRoute: '/',
             abortController: null,
 
-            sendMessage: async (content: string) => {
-                const { isStreaming, messages } = get()
+            // Initial Vital State
+            currentActivity: {
+                stage: 'IDLE',
+                actor: 'System',
+                action: 'Ready',
+                isThinking: false
+            },
+            councilSession: {
+                activeAgents: [],
+                monologues: []
+            },
+
+            resetActivity: () => {
+                set({
+                    currentActivity: { stage: 'IDLE', actor: 'System', action: 'Ready', isThinking: false },
+                    councilSession: { activeAgents: [], monologues: [] }
+                })
+            },
+
+            sendMessage: async (content: string, options = {}) => {
+                const { isStreaming } = get()
                 if (isStreaming || !content.trim()) return
 
-                // Create AbortController
                 const controller = new AbortController()
                 set({ isStreaming: true, abortController: controller })
+
+                // Reset Activity for new turn
+                set({
+                    currentActivity: { stage: 'ROUTING', actor: 'System', action: 'Starting...', isThinking: true },
+                    councilSession: { activeAgents: [], monologues: [] } // Clear previous council session? Or keep history? clearing for now.
+                })
 
                 const userMessage: Message = {
                     id: crypto.randomUUID(),
                     role: 'user',
                     content,
                     timestamp: new Date(),
-                    isComplete: true,  // User messages are instant
+                    isComplete: true,
                 }
 
                 set((state) => ({ messages: [...state.messages, userMessage] }))
 
-                // Create placeholder assistant message
                 const assistantMessageId = crypto.randomUUID()
                 const assistantMessage: Message = {
                     id: assistantMessageId,
                     role: 'assistant',
-                    content: '',
+                    content: '', // Will stream
                     timestamp: new Date(),
-                    isComplete: false,  // Will be marked complete after typing
+                    isComplete: false,
                 }
 
                 set((state) => ({ messages: [...state.messages, assistantMessage] }))
 
                 try {
-                    const response = await fetch('/api/chat', {
+                    // Use the specific stream endpoint!
+                    const response = await fetch('/api/chat/stream', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -83,19 +128,13 @@ export const useChatStore = create<ChatState>()(
                         },
                         body: JSON.stringify({
                             message: content,
-                            history: get().messages.slice(0, -2).map(m => ({
-                                role: m.role,
-                                content: m.content
-                            })),
-                            lawyer_id: JSON.parse(localStorage.getItem('user') || '{}').id,
+                            session_id: options.session_id,
+                            mode: 'auto'
                         }),
-                        signal: controller.signal // Bind abort signal
+                        signal: controller.signal
                     })
 
-                    if (!response.ok) {
-                        throw new Error('Chat request failed')
-                    }
-
+                    if (!response.ok) throw new Error('Chat request failed')
                     if (!response.body) throw new Error('ReadableStream not supported')
 
                     const reader = response.body.getReader()
@@ -119,35 +158,64 @@ export const useChatStore = create<ChatState>()(
 
                                     const data = JSON.parse(jsonStr)
 
-                                    // Handle Events
-                                    if (data.type === 'thought') {
+                                    // --- EVENT HANDLERS (VITAL V3.0) ---
+
+                                    if (data.type === 'stage_change') {
                                         set((state) => ({
-                                            messages: state.messages.map(m =>
-                                                m.id === assistantMessageId
-                                                    ? { ...m, thoughts: [...(m.thoughts || []), data.content] }
-                                                    : m
-                                            )
+                                            currentActivity: { ...state.currentActivity, stage: data.stage }
                                         }))
-                                    } else if (data.type === 'text') {
+                                    }
+                                    else if (data.type === 'step_update') {
+                                        const { actor, status, message } = data.payload
+                                        set((state) => ({
+                                            currentActivity: {
+                                                ...state.currentActivity,
+                                                actor: actor || state.currentActivity.actor,
+                                                action: message || status,
+                                                isThinking: true
+                                            }
+                                        }))
+                                    }
+                                    else if (data.type === 'council_thought') {
+                                        const { agent, content } = data.payload
+                                        const entry: MonologueEntry = {
+                                            id: crypto.randomUUID(),
+                                            agent,
+                                            content,
+                                            timestamp: new Date()
+                                        }
+
+                                        set((state) => {
+                                            // Limit History (Genius Tweak #2)
+                                            const newMonologues = [...state.councilSession.monologues, entry].slice(-20)
+                                            const newAgents = Array.from(new Set([...state.councilSession.activeAgents, agent]))
+
+                                            return {
+                                                councilSession: {
+                                                    activeAgents: newAgents,
+                                                    monologues: newMonologues
+                                                }
+                                            }
+                                        })
+                                    }
+                                    else if (data.type === 'token') {
                                         accumulatedContent += data.content
                                         set((state) => ({
                                             messages: state.messages.map(m =>
                                                 m.id === assistantMessageId
                                                     ? { ...m, content: accumulatedContent }
                                                     : m
-                                            )
+                                            ),
+                                            // Ensure activity is Verdict when tokens start flow
+                                            currentActivity: {
+                                                ...state.currentActivity,
+                                                isThinking: false, // Typing is not "thinking"
+                                                action: 'Typing...',
+                                                stage: state.currentActivity.stage === 'IDLE' ? 'VERDICT' : state.currentActivity.stage
+                                            }
                                         }))
-                                    } else if (data.type === 'task_json') {
-                                        set((state) => ({
-                                            messages: state.messages.map(m =>
-                                                m.id === assistantMessageId
-                                                    ? { ...m, taskJson: data.task }
-                                                    : m
-                                            )
-                                        }))
-                                    } else if (data.type === 'done') {
-                                        // Finished
-                                    } else if (data.type === 'error') {
+                                    }
+                                    else if (data.type === 'error') {
                                         accumulatedContent += `\n❌ ${data.content}`
                                         set((state) => ({
                                             messages: state.messages.map(m =>
@@ -157,6 +225,7 @@ export const useChatStore = create<ChatState>()(
                                             )
                                         }))
                                     }
+
                                 } catch (e) {
                                     console.error('SSE Parse Error', e)
                                 }
@@ -169,12 +238,16 @@ export const useChatStore = create<ChatState>()(
                     set((state) => ({
                         messages: state.messages.map(m =>
                             m.id === assistantMessageId
-                                ? { ...m, content: 'عذراً، حدث خطأ في الاتصال' }
+                                ? { ...m, content: accumulatedContent || 'عذراً، حدث خطأ في الاتصال' }
                                 : m
                         )
                     }))
                 } finally {
-                    set({ isStreaming: false, abortController: null })
+                    set((state) => ({
+                        isStreaming: false,
+                        abortController: null,
+                        currentActivity: { ...state.currentActivity, isThinking: false, action: 'Complete' }
+                    }))
                 }
             },
 
@@ -183,9 +256,6 @@ export const useChatStore = create<ChatState>()(
                 if (abortController) {
                     abortController.abort()
                     set({ isStreaming: false, abortController: null })
-
-                    // Optional: Add "Cancelled" message or marker? 
-                    // For now just stopping is enough.
                 }
             },
 
@@ -193,25 +263,13 @@ export const useChatStore = create<ChatState>()(
                 messages: [...state.messages, message]
             })),
 
-            markMessageComplete: (messageId) => set((state) => ({
-                messages: state.messages.map(m =>
-                    m.id === messageId ? { ...m, isComplete: true } : m
-                )
-            })),
-
-            updateTaskStatus: (messageId, taskJson) => set((state) => ({
-                messages: state.messages.map(m =>
-                    m.id === messageId ? { ...m, taskJson } : m
-                )
-            })),
-
-            clearChat: () => set({ messages: [] }),
+            clearChat: () => set({ messages: [], councilSession: { activeAgents: [], monologues: [] } }),
 
             setRoute: (route) => set({ currentRoute: route }),
         }),
         {
-            name: 'legal-ai-chat',
-            partialize: (state) => ({ messages: state.messages }),
+            name: 'legal-ai-chat-v3', // New storage key to avoid conflict
+            partialize: (state) => ({ messages: state.messages }), // Only persist messages, not ephemeral state
         }
     )
 )

@@ -22,7 +22,13 @@ class TaskStorage:
     """
     
     def __init__(self):
-        self.local_storage_dir = Path("e:/law/tasks")
+        """Initialize task storage with configurable local directory"""
+        from pathlib import Path
+        import os
+        
+        # Get project root and use configurable path
+        project_root = Path(os.getcwd())
+        self.local_storage_dir = project_root / settings.local_tasks_dir
         self.local_storage_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"📁 Using local storage for tasks: {self.local_storage_dir}")
     

@@ -5,7 +5,7 @@ interface ProgressStep {
     id: string;
     status: 'pending' | 'running' | 'success' | 'error';
     message: string;
-    timestamp?: string;
+    timestamp?: string | number;
 }
 
 interface ToolExecutionProgressProps {

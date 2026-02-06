@@ -7,12 +7,14 @@ import bcrypt
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
+from .models import SignupRequest, LoginRequest, AuthResponse, UserProfile
+from agents.config.settings import settings
 import os
 
 # JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-this-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24 hours
+SECRET_KEY = settings.jwt_secret_key
+ALGORITHM = settings.jwt_algorithm
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.jwt_expire_minutes
 
 
 def hash_password(password: str) -> str:

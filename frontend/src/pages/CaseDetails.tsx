@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ArrowRight, Plus, Calendar, Clock, MapPin, User, FileText, X, Gavel, Scale, Users, Upload, Edit2, Trash2, Download, Eye } from 'lucide-react'
-import { supabase } from '../supabaseClient'
+import { apiClient } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useBreadcrumb } from '../contexts/BreadcrumbContext'
 import { toast } from 'sonner'
@@ -42,6 +42,11 @@ interface Hearing {
     outcome: string | null
     next_hearing_date: string | null
     created_at: string
+    // ✅ New denormalized fields
+    client_name?: string
+    case_number?: string
+    case_year?: string
+    court_name?: string
 }
 
 interface Opponent {
@@ -118,43 +123,44 @@ export function CaseDetails() {
         try {
             setLoading(true)
 
-            // Fetch case
-            const { data: caseDataResult, error: caseError } = await supabase
-                .from('cases')
-                .select('*, clients(full_name)')
-                .eq('id', id)
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .single()
+            // 1. Fetch case details
+            const caseResponse = await apiClient.get(`/api/cases/${id}`)
+            if (caseResponse.success && caseResponse.case) {
+                setCaseData(caseResponse.case)
 
-            if (caseError) throw caseError
-            setCaseData(caseDataResult)
+                // If the API returns clients object, great. 
+                // If not (e.g. some versions of get_cases_by_lawyer), we might miss client name in header.
+                // But we checked `case_storage` returns `clients(full_name)`.
+            } else {
+                toast.error('لم يتم العثور على القضية')
+                return
+            }
 
-            // Fetch hearings
-            const { data: hearingsData, error: hearingsError } = await supabase
-                .from('hearings')
-                .select('*')
-                .eq('case_id', id)
-                .eq('lawyer_id', lawyerId)  // ✅ UPDATED for assistants
-                .order('hearing_date', { ascending: false })
+            // 2. Fetch hearings
+            const hearingsResponse = await apiClient.get(`/api/hearings/case/${id}`)
+            if (hearingsResponse.success && hearingsResponse.hearings) {
+                // Sort by date desc
+                const sortedHearings = hearingsResponse.hearings.sort((a: Hearing, b: Hearing) =>
+                    new Date(b.hearing_date).getTime() - new Date(a.hearing_date).getTime()
+                )
+                setHearings(sortedHearings)
+            }
 
-            if (hearingsError) throw hearingsError
-            setHearings(hearingsData || [])
+            // 3. Fetch opponents
+            const opponentsResponse = await apiClient.get(`/api/cases/${id}/opponents`)
+            if (opponentsResponse.success && opponentsResponse.opponents) {
+                setOpponents(opponentsResponse.opponents)
+            }
 
-            // Fetch opponents
-            const { data: opponentsData, error: opponentsError } = await supabase
-                .from('opponents')
-                .select('*')
-                .eq('case_id', id)
-
-            if (opponentsError) throw opponentsError
-            setOpponents(opponentsData || [])
-
-            // Fetch documents from backend API
+            // 4. Fetch documents
             try {
-                const documentsResponse = await fetch(`http://localhost:8000/api/documents/case/${id}`)
-                if (documentsResponse.ok) {
-                    const documentsJson = await documentsResponse.json()
-                    setDocuments(documentsJson.documents || [])
+                // Use relative path for proxy or direct API URL if configured
+                // Note: apiClient uses relative URL by default or base URL.
+                // But the previous code used `http://localhost:8000`.
+                // We should use apiClient (which likely points to /api or localhost:8000 depending on config).
+                const documentsResponse = await apiClient.get(`/api/documents/case/${id}`)
+                if (documentsResponse.success && documentsResponse.documents) {
+                    setDocuments(documentsResponse.documents)
                 }
             } catch (error) {
                 console.error('Error fetching documents:', error)
@@ -306,26 +312,15 @@ export function CaseDetails() {
                                     onClick={async () => {
                                         if (confirm('هل تريد حذف هذا الخصم؟')) {
                                             try {
-                                                const { error } = await supabase
-                                                    .from('opponents')
-                                                    .delete()
-                                                    .eq('id', opponent.id)
-
-                                                if (error) throw error
-
-                                                // ✅ تسجيل حذف الخصم
-                                                await logAction(
-                                                    'delete',
-                                                    'opponents',
-                                                    opponent.id,
-                                                    opponent,
-                                                    null,
-                                                    'حذف خصم من القضية'
-                                                )
-
-                                                toast.success('تم حذف الخصم')
-                                                fetchCaseDetails()
+                                                const response = await apiClient.delete(`/api/cases/${caseData.id}/opponents/${opponent.id}`)
+                                                if (response.success) {
+                                                    toast.success('تم حذف الخصم')
+                                                    fetchCaseDetails()
+                                                } else {
+                                                    throw new Error('Failed to delete')
+                                                }
                                             } catch (error) {
+                                                console.error('Error deleting opponent:', error)
                                                 toast.error('فشل حذف الخصم')
                                             }
                                         }
@@ -422,25 +417,13 @@ export function CaseDetails() {
                                             onClick={async () => {
                                                 if (confirm('هل تريد حذف هذه الجلسة؟')) {
                                                     try {
-                                                        const { error } = await supabase
-                                                            .from('hearings')
-                                                            .delete()
-                                                            .eq('id', hearing.id)
-
-                                                        if (error) throw error
-
-                                                        // ✅ تسجيل حذف الجلسة
-                                                        await logAction(
-                                                            'delete',
-                                                            'hearings',
-                                                            hearing.id,
-                                                            hearing,
-                                                            null,
-                                                            'حذف جلسة'
-                                                        )
-
-                                                        toast.success('تم حذف الجلسة')
-                                                        fetchCaseDetails()
+                                                        const response = await apiClient.delete(`/api/hearings/${hearing.id}`)
+                                                        if (response.success) {
+                                                            toast.success('تم حذف الجلسة')
+                                                            fetchCaseDetails()
+                                                        } else {
+                                                            throw new Error('Failed')
+                                                        }
                                                     } catch (error) {
                                                         toast.error('فشل حذف الجلسة')
                                                     }
@@ -597,11 +580,9 @@ export function CaseDetails() {
                                                 if (confirm('هل تريد حذف هذا المستند؟')) {
                                                     try {
                                                         // Delete from backend API
-                                                        const response = await fetch(`http://localhost:8000/api/documents/${doc.id}`, {
-                                                            method: 'DELETE'
-                                                        })
+                                                        const response = await apiClient.delete(`/api/documents/${doc.id}`)
 
-                                                        if (!response.ok) {
+                                                        if (!response.success) {
                                                             throw new Error('فشل حذف المستند')
                                                         }
 
@@ -810,13 +791,21 @@ function UploadDocumentModal({
             formData.append('document_type', documentType || 'مستند')  // ✅ النص المخصص
             formData.append('enable_ocr', enableOCR.toString())
 
-            const uploadResponse = await axios.post(
-                'http://localhost:8000/api/documents/upload',
+            // Use apiClient for upload which handles auth headers
+            // Ensure FormData is handled correctly
+            const uploadResponse = await apiClient.post(
+                '/api/documents/upload',
                 formData,
                 { headers: { 'Content-Type': 'multipart/form-data' } }
             )
 
-            const documentId = uploadResponse.data.document.id
+            if (!uploadResponse.success) throw new Error('Upload failed')
+
+            // apiClient.post returns the response data directly if successful? 
+            // Checking apiClient implementation (usually it returns parsed JSON)
+            // Assuming result structure: uploadResponse = { success: true, document: ... }
+
+            const documentId = uploadResponse.document.id
 
             // ✅ تسجيل رفع المستند
             await logAction(
@@ -948,31 +937,26 @@ function AddHearingModal({ caseId, caseNumber, onClose, onSuccess }: AddHearingM
         setLoading(true)
 
         try {
-            const { data, error } = await supabase
-                .from('hearings')
-                .insert({
-                    case_id: caseId,
-                    lawyer_id: getEffectiveLawyerId(),  // ✅ يُسجل للمحامي
-                    hearing_date: formData.hearing_date,
-                    hearing_time: formData.hearing_time || null,
-                    court_room: formData.court_room || null,
-                    judge_name: formData.judge_name || null,
-                    judge_requests: formData.judge_requests || null,
-                    notes: formData.notes || null,
-                    outcome: formData.outcome || null,
-                    next_hearing_date: formData.next_hearing_date || null
-                })
-                .select()
-                .single()
+            const payload = {
+                case_id: caseId,
+                hearing_date: formData.hearing_date,
+                hearing_time: formData.hearing_time || null,
+                court_room: formData.court_room || null,
+                judge_name: formData.judge_name || null,
+                judge_requests: formData.judge_requests || null,
+                notes: formData.notes || null,
+                outcome: formData.outcome || null,
+                next_hearing_date: formData.next_hearing_date || null
+            }
 
-            if (error) throw error
+            const response = await apiClient.post('/api/hearings', payload)
 
-            // ✅ تسجيل إضافة الجلسة
-            if (data) {
+            if (response.success && response.hearing) {
+                // ✅ تسجيل إضافة الجلسة
                 await logAction(
                     'create',
                     'hearings',
-                    data.id,
+                    response.hearing.id,
                     null,
                     {
                         hearing_date: formData.hearing_date,
@@ -981,10 +965,12 @@ function AddHearingModal({ caseId, caseNumber, onClose, onSuccess }: AddHearingM
                     },
                     'إضافة جلسة جديدة'
                 )
-            }
 
-            toast.success('تمت إضافة الجلسة بنجاح')
-            onSuccess()
+                toast.success('تمت إضافة الجلسة بنجاح')
+                onSuccess()
+            } else {
+                throw new Error('Failed to create hearing')
+            }
         } catch (error: any) {
             console.error('Error adding hearing:', error)
             toast.error('فشل إضافة الجلسة')
@@ -1182,30 +1168,35 @@ function EditHearingModal({ hearing, caseNumber, onClose, onSuccess }: EditHeari
         }
         setLoading(true)
         try {
-            const { error } = await supabase
-                .from('hearings')
-                .update({
-                    hearing_date: formData.hearing_date,
-                    hearing_time: formData.hearing_time || null,
-                    court_room: formData.court_room || null,
-                    judge_name: formData.judge_name || null,
-                    judge_requests: formData.judge_requests || null,
-                    notes: formData.notes || null,
-                    outcome: formData.outcome || null,
-                    next_hearing_date: formData.next_hearing_date || null
-                })
-                .eq('id', hearing.id)
-            if (error) throw error
+            const payload = {
+                hearing_date: formData.hearing_date,
+                hearing_time: formData.hearing_time || null,
+                court_room: formData.court_room || null,
+                judge_name: formData.judge_name || null,
+                judge_requests: formData.judge_requests || null,
+                notes: formData.notes || null,
+                outcome: formData.outcome || null,
+                next_hearing_date: formData.next_hearing_date || null
+            }
 
-            // ✅ تسجيل تعديل الجلسة
-            await logAction(
-                'update',
-                'hearings',
-                hearing.id,
-                hearing,
-                { ...hearing, ...formData },
-                'تعديل تفاصيل الجلسة'
-            )
+            const response = await apiClient.put(`/api/hearings/${hearing.id}`, payload)
+
+            if (response.success) {
+                // ✅ تسجيل تعديل الجلسة
+                await logAction(
+                    'update',
+                    'hearings',
+                    hearing.id,
+                    hearing,
+                    { ...hearing, ...formData },
+                    'تعديل تفاصيل الجلسة'
+                )
+
+                toast.success('تم تحديث الجلسة بنجاح')
+                onSuccess()
+            } else {
+                throw new Error('Failed to update hearing')
+            }
 
             toast.success('تم تحديث الجلسة بنجاح')
             onSuccess()
@@ -1302,33 +1293,21 @@ function AddOpponentModal({ caseId, caseNumber, onClose, onSuccess }: AddOpponen
         setLoading(true)
 
         try {
-            const { data, error } = await supabase
-                .from('opponents')
-                .insert({
-                    case_id: caseId,
-                    full_name: formData.full_name,
-                    national_id: formData.national_id || null,
-                    capacity: formData.capacity || null
-                })
-                .select()
-                .single()
-
-            if (error) throw error
-
-            // ✅ تسجيل إضافة الخصم
-            if (data) {
-                await logAction(
-                    'create',
-                    'opponents',
-                    data.id,
-                    null,
-                    { full_name: formData.full_name, capacity: formData.capacity },
-                    'إضافة خصم جديد'
-                )
+            const payload = {
+                full_name: formData.full_name,
+                national_id: formData.national_id || null,
+                capacity: formData.capacity || null
             }
 
-            toast.success('تمت إضافة الخصم بنجاح')
-            onSuccess()
+            const response = await apiClient.post(`/api/cases/${caseId}/opponents`, payload)
+
+            if (response.success) {
+                toast.success('تمت إضافة الخصم بنجاح')
+                onSuccess()
+            } else {
+                throw new Error('Failed to create opponent')
+            }
+
         } catch (error: any) {
             console.error('Error adding opponent:', error)
             toast.error('فشل إضافة الخصم')

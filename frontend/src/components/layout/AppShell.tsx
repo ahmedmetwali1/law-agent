@@ -8,10 +8,18 @@ import { NavigationSidebar } from './NavigationSidebar'
 import { SystemFooter } from './SystemFooter'
 import { AINexus } from '../features/ai/AINexus'
 
+import { AnnouncementBanner } from '../common/AnnouncementBanner'
+import { SubscriptionWarning } from '../common/SubscriptionWarning'
+import { SubscriptionLockOverlay } from '../common/SubscriptionLockOverlay'
+import { InactiveAccountBanner } from '../common/InactiveAccountBanner'
+import { useAuth } from '../../contexts/AuthContext'
+
 export function AppShell() {
+    const { profile } = useAuth()
     const [isSidebarExpanded, setIsSidebarExpanded] = useState(false) // State kept for sidebar internal logic if needed, but not affecting layout margin
     const [isAIExpanded, setIsAIExpanded] = useState(true)
     const [showMobileAI, setShowMobileAI] = useState(false)
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false) // ✅ Mobile Menu State
     const location = useLocation()
 
     // Hide AI Nexus on /chat or /ai route
@@ -26,20 +34,31 @@ export function AppShell() {
     return (
         <div dir="rtl" className="min-h-screen bg-obsidian-900 text-white">
             {/* Global Header */}
-            <GlobalHeader />
+            <GlobalHeader onMenuClick={() => setMobileMenuOpen(true)} />
+
+            {/* Subscription Lock Overlay */}
+            <SubscriptionLockOverlay />
+
+            {/* Global Announcement Banner */}
+            <div className="pt-16">
+                <AnnouncementBanner />
+                <div className="container mx-auto max-w-7xl">
+                    <SubscriptionWarning />
+                </div>
+            </div>
 
             {/* Main Layout Container - Split Screen */}
-            <div className={`flex min-h-[calc(100vh-64px)] pt-16 ${location.pathname === '/ai' ? '' : 'pb-8'}`}>
+            <div className={`flex min-h-[calc(100vh-64px)] ${(location.pathname === '/ai' || location.pathname === '/chat') ? '' : 'pb-8'}`}>
                 {/* Content Area - With Dynamic Margins */}
                 <main
                     className={`
             flex-1 overflow-y-auto scrollbar-thin
             transition-all duration-300 ease-in-out
-            mr-20  // ✅ Fixed margin: Content starts after the collapsed sidebar strip
-            ${!hideAINexus && isAIExpanded ? 'ml-[20%]' : !hideAINexus ? 'ml-16' : 'ml-0'}
+            mr-0 lg:mr-20  // ✅ Fixed margin: Content starts after the collapsed sidebar strip ONLY on desktop
+            ${!hideAINexus && isAIExpanded ? 'lg:ml-[20%]' : !hideAINexus ? 'lg:ml-16' : 'lg:ml-0'}
           `}
                 >
-                    <div className={location.pathname === '/ai' ? 'h-[calc(100vh-64px)] -mt-4' : 'p-4'}>
+                    <div className={(location.pathname === '/ai' || location.pathname === '/chat') ? 'h-[calc(100vh-64px)] -mt-4' : 'p-4'}>
                         <Outlet />
                     </div>
                 </main>
@@ -70,7 +89,13 @@ export function AppShell() {
                 )}
 
                 {/* Navigation Sidebar (Fixed Right) */}
-                {!hideNavigation && <NavigationSidebar onExpandChange={setIsSidebarExpanded} />}
+                {!hideNavigation && (
+                    <NavigationSidebar
+                        onExpandChange={setIsSidebarExpanded}
+                        mobileIsOpen={mobileMenuOpen}
+                        onMobileClose={() => setMobileMenuOpen(false)}
+                    />
+                )}
             </div>
 
             {/* System Footer */}
