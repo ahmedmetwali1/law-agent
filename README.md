@@ -1,205 +1,133 @@
-# 🎓 Legal AI Multi-Agent System
-## نظام الوكلاء الذكية للمحاماة
+# Marid: Professional Legal AI Multi-Agent System ⚖️🤖
 
-نظام متطور متعدد الوكلاء للاستشارات القانونية باستخدام الذكاء الاصطناعي، مع قاعدة معرفة قانونية شاملة.
+**Marid** is a state-of-the-art, high-performance legal office management and AI advisory platform. Designed for modern law firms, it orchestrates a complex network of specialized AI agents to handle everything from administrative tasks to deep legal research and document drafting.
 
-## 🌟 المميزات
+---
 
-- **وكيل محامي رئيسي** يستقبل القضايا ويحللها
-- **بناء ديناميكي للوكلاء** حسب نوع القضية
-- **وكلاء متخصصين** (جنائي، مدني، تجاري، أدلة، سوابق)
-- **بحث هجين** يدمج البحث بالكلمات المفتاحية والبحث الدلالي
-- **قاعدة معرفة قانونية** على Supabase مع دعم Vector Search
-- **حفظ القضايا** في ملفات JSON منظمة
+## 🛠️ Core Technology Stack
 
-## 🏗️ الهيكل المعماري
+### **Frontend (The Interface of Intelligence)**
+- **Framework:** React 18 (Vite-powered)
+- **Language:** TypeScript (Strict Type Safety)
+- **UI Architecture:** 
+  - **Tailwind CSS** for modern, responsive aesthetics.
+  - **Radix UI Primitives** for accessible, premium components.
+  - **Lucide React** for consistent iconography.
+- **State & Data:**
+  - **Zustand** for lightweight, high-performance global state.
+  - **TanStack Query (React Query)** for robust server-state management and caching.
+- **Communication:** Axios & Supabase JS Client.
 
-```
-┌─────────────┐
-│   المستخدم   │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────────────────────┐
-│    General Lawyer Agent     │  ← الوكيل الرئيسي
-│  (يستقبل ويحلل القضية)      │
-└──────┬──────────────────────┘
-       │
-       ├──► Case Planner (مخطط القضية)
-       │
-       ├──► Agent Builder (بناء الوكلاء)
-       │
-       └──► Specialist Agents
-            ├─ Criminal Law Agent
-            ├─ Civil Law Agent
-            ├─ Commercial Law Agent
-            ├─ Evidence Analysis Agent
-            └─ Precedent Research Agent
-                 │
-                 ▼
-            ┌───────────────────┐
-            │ Knowledge Base    │
-            │ (Supabase)        │
-            │ - legal_sources   │
-            │ - document_chunks │
-            │ - thought_templates│
-            └───────────────────┘
-```
+### **Backend (The Cognitive Engine)**
+- **Framework:** FastAPI (Python 3.10+)
+- **Agent Orchestration:** **LangGraph** (Stateful Multi-Agent Workflows).
+- **Core AI Integration:** LangChain, OpenAI, Anthropic, and Google Gemini.
+- **Data Validation:** Pydantic v2.
+- **Caching:** Redis-ready for high-scale performance.
+- **Real-time:** WebSockets for agent perception and live updates.
 
-## 📁 هيكل المشروع
+### **Infrastructure & Database**
+- **Persistence:** PostgreSQL (via Supabase).
+- **Security:** Supabase Auth (JWT) + custom RBAC (Role-Based Access Control).
+- **Storage:** S3-compatible cloud storage and local encrypted backups.
+- **Search:** Hybrid Search (Vector + Full-Text) for precision legal retrieval.
 
-```
-law/
-├── agents/
-│   ├── config/          # إعدادات النظام
-│   │   ├── database.py
-│   │   └── settings.py
-│   ├── core/            # الوكلاء الأساسية
-│   │   ├── base_agent.py
-│   │   ├── general_lawyer_agent.py
-│   │   ├── case_planner.py
-│   │   └── agent_builder.py
-│   ├── specialists/     # الوكلاء المتخصصين
-│   │   ├── criminal_law_agent.py
-│   │   ├── civil_law_agent.py
-│   │   ├── commercial_law_agent.py
-│   │   ├── evidence_analysis_agent.py
-│   │   └── precedent_research_agent.py
-│   ├── knowledge/       # نظام المعرفة
-│   │   ├── hybrid_search.py
-│   │   └── embeddings.py
-│   ├── storage/         # إدارة التخزين
-│   │   └── case_storage.py
-│   └── templates/       # قوالب الوكلاء
-│       └── agent_prompts.json
-├── api/
-│   └── main.py          # FastAPI application
-├── tests/
-│   ├── test_agents.py
-│   └── test_search.py
-├── .env.example
-├── requirements.txt
-└── README.md
+---
+
+## 🏗️ Architectural Overview: The Agent Graph
+
+Marid utilizes a non-linear, graph-based architecture using **LangGraph**. Unlike simple chatbots, Marid transitions through cognitive states based on the complexity of the legal query.
+
+### **The Cognitive Workflow**
+1.  **Gatekeeper Node:** Analyzes user intent and classifies the query (Administrative vs. Legal).
+2.  **Stateless Router:** Dispatches tasks to specialized agent clusters.
+3.  **Specialized Agent Nodes:**
+    - **ResearchNode:** Performs deep-dive legal lookups in the knowledge base.
+    - **CouncilNode:** Aggregates legal opinions and performs multi-step reasoning.
+    - **DraftNode:** Generates professional legal documents from templates or research.
+    - **AdminOpsNode:** Interacts with the office database (Clients, Cases, Hearings).
+4.  **Reflector / Reviewer:** Self-corrects and verifies the output for legal accuracy before finalization.
+
+---
+
+## 📁 System Blueprint
+
+```text
+e:\law
+├── agents/             # The "Brain" of the system
+│   ├── graph/          # LangGraph definitions (nodes, state, subgraphs)
+│   ├── persistence/    # Postgres & Supabase persistence layers
+│   ├── tools/          # Custom-built tools (Hybrid Search, Legal Blackboard)
+│   └── prompts/        # Centralized system prompts & templates
+├── api/                # The "Central Nervous System"
+│   ├── main.py         # Entry point & router registration
+│   ├── services/       # Business logic (Chat, Admin, Deliberation)
+│   └── routers/        # Modular API endpoints
+├── frontend/           # The "Sense" (UI/UX)
+│   ├── src/api/        # BFF (Backend-for-Frontend) integration
+│   ├── src/components/ # Modular, reusable shadcn-inspired components
+│   └── src/stores/     # Zustand stores for real-time UI state
+└── migrations/         # Database evolution & SQL schemas
 ```
 
-## 🚀 التثبيت والتشغيل
+---
 
-### 1. المتطلبات الأساسية
-- Python 3.10+
-- حساب Supabase
-- API key لنموذج الذكاء الاصطناعي (OpenAI/Anthropic/Google)
+## 🚀 Professional Setup & Deployment
 
-### 2. التثبيت
+### **Prerequisites**
+- **Node.js** v18+ & **pnpm** (Recommended)
+- **Python** 3.10+
+- **Supabase Account** with PostgreSQL & Vector Extension.
+- **Environment Variables:** Configure `.env` based on the internal security protocol.
 
+### **Backend Initialization**
 ```bash
-# Clone المشروع
-git clone <repository-url>
-cd law
-
-# إنشاء بيئة افتراضية
+# Create and activate virtual environment
 python -m venv venv
+source venv/bin/activate  # venv\Scripts\activate on Windows
 
-# تفعيل البيئة
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# تثبيت المكتبات
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. الإعدادات
+# Run migrations
+python migrations/run_migrations.py
 
-```bash
-# نسخ ملف الإعدادات
-copy .env.example .env
-
-# تعديل الملف وإضافة المفاتيح الخاصة بك
-# SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY, etc.
-```
-
-### 4. تشغيل السيرفر
-
-```bash
-# تشغيل FastAPI
+# Launch API
 uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-الآن يمكن الوصول للـ API على: `http://localhost:8000`
-
-## 📚 استخدام الـ API
-
-### إنشاء قضية جديدة
-
+### **Frontend Initialization**
 ```bash
-POST /api/cases/new
-Content-Type: application/json
-
-{
-  "facts": "وقائع القضية بالتفصيل...",
-  "client_name": "اسم العميل",
-  "case_type": "جنائي/مدني/تجاري (اختياري)"
-}
+cd frontend
+npm install
+npm run dev
 ```
 
-### تحليل القضية
+---
 
-```bash
-POST /api/cases/{case_id}/analyze
-```
+## ⚖️ Security & Data Governance
 
-### الحصول على التقرير
+- **Zero Trust:** All Backend requests are validated via JWT tokens.
+- **RLS (Row Level Security):** Data is isolated at the database level using Supabase RLS policies.
+- **Audit Logging:** Every administrative action is logged in a secure, non-erasable audit trail.
+- **Sanitization:** All agent outputs are sanitized to prevent injection or leaking of PII (Personally Identifiable Information).
 
-```bash
-GET /api/cases/{case_id}/report
-```
+---
 
-## 🔍 قاعدة المعرفة
+## 📖 API Documentation
 
-قاعدة البيانات تحتوي على:
-- **legal_sources**: النصوص القانونية الكاملة
-- **document_chunks**: أجزاء مفهرسة (~1500 كلمة) مع embeddings
-- **thought_templates**: قوالب تفكير قانوني ثابتة
+Detailed OpenAPI documentation is available at:
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
 
-### البحث الهجين
-يدمج النظام بين:
-1. **Keyword Search**: البحث بالكلمات المفتاحية (Full-Text Search)
-2. **Vector Search**: البحث الدلالي باستخدام embeddings
+### **Primary Endpoints**
+- `POST /api/chat/message`: The entry point for the Multi-Agent engine.
+- `GET /api/dashboard/stats`: Global office analytics.
+- `PATCH /api/cases/{case_id}`: Secure case state transitions.
 
-للمزيد من التفاصيل، انظر [database_schema.md](../brain/database_schema.md)
+---
 
-## 🧪 الاختبارات
+> [!IMPORTANT]
+> This project is a **private, proprietary system**. Unauthorized access or distribution of the code or data is strictly prohibited.
 
-```bash
-# تشغيل جميع الاختبارات
-pytest
-
-# اختبار محدد
-pytest tests/test_agents.py
-
-# مع التغطية
-pytest --cov=agents tests/
-```
-
-## 📖 التوثيق
-
-- [خطة التنفيذ](../brain/implementation_plan.md)
-- [مخطط قاعدة البيانات](../brain/database_schema.md)
-- [قائمة المهام](../brain/task.md)
-
-## 🤝 المساهمة
-
-المشروع قيد التطوير النشط. للمساهمة:
-1. Fork المشروع
-2. أنشئ branch جديد
-3. اعمل commit للتغييرات
-4. افتح Pull Request
-
-## 📝 الترخيص
-
-جميع الحقوق محفوظة © 2026
-
-## 📞 الدعم
-
-للأسئلة والدعم، يرجى فتح Issue على GitHub.
+**© 2026 Marid AI Systems. All rights reserved.**
