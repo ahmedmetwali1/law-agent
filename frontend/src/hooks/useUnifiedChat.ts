@@ -115,6 +115,9 @@ export function useUnifiedChat(initialSessionId: string | null = null, sessionTy
                 // However, deduplication is good for pagination.
                 return deduplicateMessages(existing, parsedData);
             });
+
+            // ✅ Hydrate Deliberation Room
+            store.hydrateFromMessages(parsedData as any);
         } catch (error: any) {
             console.error('Error loading messages:', error);
             if (isMounted.current) {

@@ -206,7 +206,8 @@ class FlexibleSearchTool(BaseTool):
         
         try:
             # Defaults
-            tables = tables or ["document_chunks"]
+            # 🛑 SAFETY: Never include 'thought_templates' by default to prevent contamination
+            tables = tables or ["document_chunks", "legal_sources"]
             limit = min(limit, 50)  # Cap at 50
             
             logger.info(f"🔍 FlexibleSearch: '{query[:30]}...' in {tables} using {method}")

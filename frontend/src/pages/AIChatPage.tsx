@@ -15,7 +15,7 @@ import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/stores/chatStore';
 import { StageProgressStepper } from '@/components/chat/StageProgressStepper';
-import { CouncilLiveView } from '@/components/chat/CouncilLiveView';
+import { DeliberationSidebar } from '@/components/chat/DeliberationSidebar';
 import { GoldenReasoningBox } from '@/components/chat/GoldenReasoningBox';
 
 // ... (SuggestionCard and WelcomeScreen kept same logic for brevity, re-including them below if needed, 
@@ -74,7 +74,7 @@ const AIChatPage: React.FC = () => {
 
     // UI State
     const [isSessionsSidebarOpen, setIsSessionsSidebarOpen] = useState(true);
-    const [isCouncilSidebarOpen, setIsCouncilSidebarOpen] = useState(false); // Default closed, opens on activity
+    const [isCouncilSidebarOpen, setIsCouncilSidebarOpen] = useState(true); // Default OPEN
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -230,10 +230,10 @@ const AIChatPage: React.FC = () => {
 
             </div>
 
-            {/* RIGHT: Council Live View (Drawer) */}
+            {/* RIGHT: Deliberation Sidebar (Drawer) */}
             <div className={`hidden lg:block transition-all duration-300 border-r border-gray-800 bg-obsidian-900/30 
                 ${isCouncilSidebarOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 overflow-hidden'}`}>
-                <CouncilLiveView />
+                <DeliberationSidebar />
             </div>
 
             {/* Mobile Council Drawer Overlay (Optional) */}

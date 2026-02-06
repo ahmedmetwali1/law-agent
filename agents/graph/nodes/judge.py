@@ -170,34 +170,15 @@ async def judge_node(state: AgentState) -> Dict[str, Any]:
     # If we are hearing from the User (Input exists), we deliberate.
     user_input = state.get('input', '')
     
-    # 1. Setup Parser & Prompt
-    user_context = state.get("context", {}).get("user_context", {})
-    lawyer_name = state.get("lawyer_name") or user_context.get("full_name") or "Lawyer"
-    today = datetime.now().strftime("%Y-%m-%d")
-    chat_history = state.get('chat_history', [])
-
-    parser = PydanticOutputParser(pydantic_object=JudgeDecision)
-    format_instructions = parser.get_format_instructions()
-    final_system_msg = f"{JUDGE_ORCHESTRATOR_PROMPT.format(lawyer_name=lawyer_name, current_date=today)}\n\n{format_instructions}"
+    # 1. Setup Parser & Prompt (Legacy / Unused - Semantic Classifier handles this now)
+    # user_context = state.get("context", {}).get("user_context", {})
+    # lawyer_name = state.get("lawyer_name") or user_context.get("full_name") or "Lawyer"
+    # today = datetime.now().strftime("%Y-%m-%d")
+    # chat_history = state.get('chat_history', [])
+    # user_country_id = user_context.get("country_id", "Unknown Jurisdiction")
     
-    # 1. Prepare Prompt Context
-    # Check for Research Data (Blackboard or State)
-    research_summary = ""
-    # Safe access for JSONB columns which might be None
-    research_blob = current_board.get("research_data") or {}
-    res_data = research_blob.get("results", []) or state.get("research_results", [])
-    
-    if res_data:
-        summary_lines = []
-        for r in res_data[:3]:
-            content = r.get('content', 'No content')[:300]
-            summary_lines.append(f"- {content}...")
-        research_summary = "\n\nAvailable Research:\n" + "\n".join(summary_lines)
+    # Legacy code removed to fix NameError: 'format_instructions' is not defined
 
-    messages = [
-        SystemMessage(content=final_system_msg),
-        HumanMessage(content=f"User Input: '{user_input}'\nHistory: {str(chat_history[-3:])}{research_summary}")
-    ]
     
     try:
         # ✅ PHASE 1 FIX: Use Semantic Classification Instead of Keywords

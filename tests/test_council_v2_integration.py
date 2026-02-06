@@ -1,70 +1,82 @@
-"""
-🧪 Council V2 Integration Test
 
-اختبار:
-1. تحميل الـ graph
-2. استدعاء council_v2
-3. التحقق من الناتج
-"""
 import sys
 sys.path.append('e:/law')
 
 import asyncio
-from agents.graph.graph import define_graph
-from agents.graph.state import AgentState
+import json
+from unittest.mock import MagicMock, AsyncMock
 
+# 1. Mock dependencies (Blackboard, LLM)
+from agents.tools.legal_blackboard_tool import LegalBlackboardTool
+mock_blackboard = MagicMock()
+mock_blackboard.read_latest_state.return_value = {
+    "workflow_status": {"researcher": "DONE", "council": "PENDING"},
+    "facts_snapshot": {"query": "Test Facts"},
+    "research_data": {"results": []}
+}
 
-async def test_council_v2():
-    """اختبار Council V2 Integration"""
+# Mock LLM Factory
+import agents.core.llm_factory
+mock_llm = AsyncMock()
+
+# HCF Response with Preamble (The Trap)
+council_json = {
+    "understanding": {"hidden_intent": "Test"},
+    "perspectives": {
+        "legislator": {"finding": "Testing HCF", "strength": "High"},
+        "strategist": {"maneuver": "Analogical", "viability": "Medium"},
+        "skeptic": {"blind_spot": "None"}
+    },
+    "synthesis": {
+        "recommended_strategy": {"approach": "Test Strategy"}
+    }
+}
+# Simulate "Thinking First" preamble
+model_output = f"""
+Here is my thinking:
+The legislator perspective will use HCF.
+
+```json
+{json.dumps(council_json)}
+```
+"""
+mock_llm.ainvoke.return_value = MagicMock(content=model_output)
+agents.core.llm_factory.get_llm.return_value = mock_llm
+
+# Import Node
+from agents.graph.nodes.council_v2 import council_v2_node, blackboard
+agents.graph.nodes.council_v2.blackboard = mock_blackboard
+
+async def test_council_parsing():
+    print("🚀 Testing Council V2 Legacy vs Robust Parsing...")
     
-    print("=" * 100)
-    print("🧪 Council V2 Integration Test")
-    print("=" * 100)
-    
-    # 1. Build graph
-    print("\n[1] Building graph...")
-    try:
-        graph = define_graph()
-        print("  ✅ Graph built successfully")
-    except Exception as e:
-        print(f"  ❌ Failed to build graph: {e}")
-        return
-    
-    # 2. Test simple input
-    print("\n[2] Testing Council V2 flow...")
-    
-    initial_state = {
-        "input": "ما هي شروط الهبة في النظام السعودي؟",
-        "session_id": "test_council_v2_123",
-        "intent": "LEGAL_COMPLEX",
-        "complexity_score": "high",
-        "next_agent": "deep_research"
+    state = {
+        "session_id": "test_council_robustness",
+        "input": "test inputs"
     }
     
     try:
-        # Note: في الواقع، council_v2 يحتاج research_data في Blackboard
-        # لكن للاختبار السريع، دعنا نتأكد أن الـ graph يعمل
+        # Run Node
+        result = await council_v2_node(state)
         
-        print(f"  • Input: '{initial_state['input']}'")
-        print(f"  • Intent: {initial_state['intent']}")
-        print(f"  • Complexity: {initial_state['complexity_score']}")
+        # Verify
+        print(f"✅ Result keys: {result.keys()}")
         
-        # في الواقع هذا سيحتاج لـ invoke كامل، لكن للاختبار السريع:
-        print("\n  ℹ️  Full graph invocation requires:")
-        print("     - Research data in Blackboard")
-        print("     - Complete workflow execution")
-        print("\n  ✅ Graph structure validated")
-        print("  ✅ Council V2 + Drafter V2 integrated")
+        # Check if Blackboard updated (means parsing worked)
+        calls = mock_blackboard.update_segment.call_args_list
+        strategy_saved = any(c[0][1] == "debate_strategy" for c in calls)
         
+        if strategy_saved:
+            print("✅ Strategy successfully parsed and saved to Blackboard")
+            # Get the saved args to verify content
+            # (In a real test we'd inspect the call args more deeply)
+        else:
+            print("❌ Strategy NOT saved (Parsing Logic Failed)")
+            
     except Exception as e:
-        print(f"  ❌ Error: {e}")
+        print(f"❌ Test Failed with Exception: {e}")
         import traceback
         traceback.print_exc()
-    
-    print("\n" + "=" * 100)
-    print("✅ Integration test complete")
-    print("=" * 100)
-
 
 if __name__ == "__main__":
-    asyncio.run(test_council_v2())
+    asyncio.run(test_council_parsing())

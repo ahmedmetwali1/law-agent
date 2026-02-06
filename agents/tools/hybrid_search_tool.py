@@ -32,11 +32,19 @@ class HybridSearchTool(BaseTool):
     
     # Article Patterns (Arabic, English, with ranges support)
     ARTICLE_PATTERNS = [
-        # Arabic patterns
+        # Arabic patterns - Standard
         r'المادة\s*[\(]?\s*([\d\u0660-\u0669]+)\s*[\)]?',           # المادة 77, المادة (77), المادة ٧٧
         r'المواد\s*[\(]?\s*([\d\u0660-\u0669]+)\s*[\)]?',          # المواد 77
         r'مادة\s*[\(]?\s*([\d\u0660-\u0669]+)\s*[\)]?',            # مادة 77
         r'م\s*[\.\:\-]?\s*([\d\u0660-\u0669]+)',                   # م.77, م:77, م-77
+        
+        # Arabic patterns - Typo variants (ه instead of ة)
+        r'الماده\s*[\(]?\s*([\d\u0660-\u0669]+)\s*[\)]?',          # الماده 77 (typo)
+        r'ماده\s*[\(]?\s*([\d\u0660-\u0669]+)\s*[\)]?',            # ماده 77 (typo)
+        
+        # Arabic patterns - with رقم
+        r'المادة\s+رقم\s*([\d\u0660-\u0669]+)',                    # المادة رقم 77
+        r'الماده\s+رقم\s*([\d\u0660-\u0669]+)',                    # الماده رقم 77 (typo)
         
         # English patterns
         r'Article\s*[\(]?\s*(\d+)\s*[\)]?',                        # Article 77, Article (77)
@@ -63,7 +71,15 @@ class HybridSearchTool(BaseTool):
         r'القانون\s+رقم\s+([\d\u0660-\u0669]+)\s+لسنة\s+([\d\u0660-\u0669]+)',  # القانون رقم 12 لسنة 2023
         r'قانون\s+([\d\u0660-\u0669]+)\s*/\s*([\d\u0660-\u0669]+)',              # قانون 12/2023
         r'النظام\s+رقم\s+([\d\u0660-\u0669]+)',                                  # النظام رقم 12
-        r'نظام\s+([\w\s]+)',                                                      # نظام المعاملات المدنية
+        
+        # Stricter general pattern for "System/Law of X"
+        # 1. Must capture words (Arabic/Latin)
+        # 2. Must NOT start with conjunctions like "و" (e.g. "واللائحة") -> Handled by logic check later usually, but regex can help.
+        # 3. Must not be a stop word.
+        # This regex matches: "نظام" + space + (word without space) + (optional more words)
+        # It stops at delimiters like "،", ".", or newlines.
+        r'نظام\s+(?!و)(?![0-9]+)([\u0621-\u064A\s]+)(?=\s|$|،|\.)',                # نظام المعاملات المدنية
+        r'قانون\s+(?!و)(?![0-9]+)([\u0621-\u064A\s]+)(?=\s|$|،|\.)',               # قانون العقوبات
         
         # English
         r'Law\s+No\s*\.?\s*(\d+)\s+of\s+(\d+)',                                  # Law No. 12 of 2023
@@ -172,9 +188,9 @@ class HybridSearchTool(BaseTool):
     
     def _generate_arabic_variants(self, text: str) -> List[str]:
         """
-        ✅ FIX: Generate all Arabic variant forms of a word + NUMBER CONVERSION
+        ✅ FIX: Generate all Arabic variant forms of a word + NUMBER CONVERSION + MORPHOLOGY
         
-        Example: "الهبة" → ["الهبة", "الهبه", "هبة", "هبه"]
+        Example: "الهبة" → ["الهبة", "الهبه", "هبة", "هبه", "واهب", "موهوب"]
                  "المادة 368" → ["المادة 368", "المادة الثامنة وستون بعد الثلاثمائة", ...]
         This solves the problem where "الهبة" ≠ "الهبه" in search
         """
@@ -183,6 +199,17 @@ class HybridSearchTool(BaseTool):
         
         variants = set()
         variants.add(text)  # Original
+        
+        # ===== MORPHOLOGICAL EXPANSION (NEW) =====
+        try:
+            from .arabic_morphology import ArabicMorphology
+            conjugations = ArabicMorphology.get_conjugations(text)
+            # ✅ OPTIMIZATION: Limit to top 5 variants to prevent RPC timeout (was 16+)
+            variants.update(conjugations[:5])
+        except ImportError:
+            logger.warning("Could not import ArabicMorphology")
+        except Exception as e:
+            logger.warning(f"Morphological expansion failed: {e}")
         
         # ===== ARTICLE NUMBER CONVERSION =====
         # Check if text contains article numbers (e.g., "المادة 368")
@@ -210,33 +237,56 @@ class HybridSearchTool(BaseTool):
                 pass  # Ignore conversion errors
         
         # ===== EXISTING VARIANTS (Hamza, Ta Marbuta, etc.) =====
-        # Remove "ال" article
-        if text.startswith('ال'):
-            variants.add(text[2:])
+        # Apply to all current variants to generate sub-variants
+        base_variants = list(variants)
+        for v in base_variants:
+            if not v:
+                continue
+                
+            # Remove "ال" article
+            if v.startswith('ال') and len(v) > 3:
+                variants.add(v[2:])
+            
+            # Swap: ة ↔ ه (ONLY AT THE END OF WORD)
+            if v.endswith('ة'):
+                variants.add(v[:-1] + 'ه')
+            elif v.endswith('ه'):
+                variants.add(v[:-1] + 'ة')
+            
+            # Swap hamzas: أ، إ، آ → ا (Normalize to bare Alif)
+            # This is safer than replacing indiscriminately
+            normalized = v.translate(str.maketrans('أإآٱ', 'aaaa'))
+            if normalized != v:
+                variants.add(normalized)
+            
+            # Swap alif maqsura: ى ↔ ي (Only at end usually, but sometimes middle)
+            if 'ى' in v:
+                variants.add(v.replace('ى', 'ي'))
+            if 'ي' in v:
+                variants.add(v.replace('ي', 'ى'))
+            
+            # Remove Tanween
+            for tanween in ['ً', 'ٌ', 'ٍ', 'َ', 'ُ', 'ِ', 'ّ', 'ْ']:
+                if tanween in v:
+                    variants.add(v.replace(tanween, ''))
         
-        # Swap: ة ↔ ه
-        if 'ة' in text:
-            variants.add(text.replace('ة', 'ه'))
-        if 'ه' in text:
-            variants.add(text.replace('ه', 'ة'))
-        
-        # Swap hamzas: أ، إ، آ → ا
-        for old, new in [('أ', 'ا'), ('إ', 'ا'), ('آ', 'ا')]:
-            if old in text:
-                variants.add(text.replace(old, new))
-        
-        # Swap alif maqsura: ى → ي
-        if 'ى' in text:
-            variants.add(text.replace('ى', 'ي'))
-        if 'ي' in text:
-            variants.add(text.replace('ي', 'ى'))
-        
-        # تنوين normalization
-        for tanween in ['ً', 'ٌ', 'ٍ']:
-            if tanween in text:
-                variants.add(text.replace(tanween, ''))
-        
-        return list(variants)
+        # 🛡️ FINAL SAFETY FILTER (The Garbage Collector)
+        clean_variants = []
+        for v in variants:
+            v_clean = v.strip()
+            # 1. Must not be empty
+            if not v_clean:
+                continue
+            # 2. Must not start with 'ة' (Impossible in Arabic)
+            if v_clean.startswith('ة'):
+                continue
+            # 3. Must be at least 2 chars
+            if len(v_clean) < 2:
+                continue
+                
+            clean_variants.append(v_clean)
+            
+        return sorted(list(set(clean_variants)))
     
     def _convert_arabic_numerals(self, text: str) -> str:
         """Convert Arabic-Indic numerals to Western numerals"""
@@ -301,10 +351,36 @@ class HybridSearchTool(BaseTool):
                 except ValueError:
                     continue
         
-        # Extract Laws
+        # Extract Laws (with cleanup)
+        clean_laws = []
         for pattern in self.LAW_PATTERNS:
             matches = re.findall(pattern, text, re.IGNORECASE)
-            entities['laws'].extend(matches)
+            for m in matches:
+                # Handle tuple groups from regex
+                if isinstance(m, tuple):
+                    m = " ".join(m)
+                
+                m_clean = m.strip()
+                
+                # 🛑 HALICUNATION FILTER 🛑
+                # 1. Too short?
+                if len(m_clean) < 4:
+                    continue
+                # 2. Starts with "and" (و) or "the" (ال)?
+                if m_clean.startswith("و") and len(m_clean.split()) == 1:
+                    continue
+                # 3. Is matched word a stop word?
+                first_word = m_clean.split()[0]
+                if first_word in self.STOP_WORDS:
+                    continue
+                # 4. Is it just "آخر" or "ما يأتي"? (Explicit block list)
+                block_list = ["آخر", "ما يأتي", "يلي", "هو", "هي", "الآتي", "التالي", "اللائحة"]
+                if m_clean in block_list:
+                    continue
+                    
+                clean_laws.append(m_clean)
+                
+        entities['laws'].extend(clean_laws)
         
         # Deduplicate
         entities['articles'] = sorted(list(set(entities['articles'])))
@@ -357,10 +433,10 @@ class HybridSearchTool(BaseTool):
         query_vector = None
         
         try:
-            # Embedding with timeout
+            # Embedding with timeout (Increased to 7s for resilience)
             query_vector = await asyncio.wait_for(
                 embeddings.aembed_query(query), 
-                timeout=3.0
+                timeout=7.0
             )
         except asyncio.TimeoutError:
             logger.warning("⚠️ Embedding Service Timeout (Scout Phase) - using fallback")
@@ -703,29 +779,102 @@ Provide ONLY the comma-separated keywords, nothing else.
         
         # Build SQL OR conditions
         try:
-            # Method 1: Try OR query
-            or_conditions = ','.join([f"content.ilike.%{v}%" for v in variants])
+            candidates = []
             
-            query_builder = db.client.table('document_chunks') \
-                .select('id, content, source_id, sequence_number, hierarchy_path, keywords')
+            # 🚀 STRATEGY 1: Advanced RPC Search (Trigram + FTS + ILIKE)
+            # This requires 'check_text_existence' RPC to be present in DB
+            try:
+                logger.info(f"🚀 Attempting Advanced RPC Search for '{core_term}'...")
+                
+                # Prepare semantic query (OR logic for FTS)
+                # Sanitize variants to prevent TSQUERY syntax errors (remove special chars)
+                safe_variants = []
+                for v in variants:
+                    # Keep basic alphanumeric and spaces
+                    clean_v = re.sub(r'[^\w\s\u0600-\u06FF]', '', v).strip()
+                    if clean_v:
+                        # ✅ CRITICAL FIX: Wrap in single quotes to handle multi-word terms (e.g., 'الموهوب له')
+                        # This prevents "syntax error in tsquery" and avoids the slow 11s fallback
+                        safe_variants.append(f"'{clean_v}'")
+                
+                # Join with | for TSQUERY
+                semantic_query = ' | '.join(safe_variants)
+                
+                # Check for law filter
+                rpc_params = {
+                    'query_text': core_term,
+                    'match_threshold': 0.3,
+                    'filter_country_id': country_id,  # ✅ NEW: Pass Country ID
+                    'semantic_query': semantic_query  # ✅ NEW: Pass Expanded Variants
+                }
+                
+                rpc_result = db.client.rpc('check_text_existence', rpc_params).execute()
+                
+                if rpc_result.data:
+                    logger.info(f"✅ RPC Search: Found {len(rpc_result.data)} results (Trigram/FTS)")
+                    
+                    # Reconstruct metadata for compatibility
+                    candidates = []
+                    for row in rpc_result.data:
+                        # Map Flat Fields -> Metadata Dict
+                        item = {
+                            "id": row.get("id"),
+                            "content": row.get("content"),
+                            "similarity_score": row.get("similarity_score"),
+                            "source_id": row.get("source_id"),
+                            "metadata": {
+                                "source_title": row.get("source_title"),
+                                "hierarchy_path": row.get("hierarchy_path"),
+                                "keywords": row.get("keywords")
+                            }
+                        }
+                        candidates.append(item)
+            except Exception as rpc_error:
+                logger.warning(f"⚠️ RPC Search Failed (falling back to standard SQL): {rpc_error}")
+                # Fallthrough to Strategy 2
             
-            # Apply filters
-            if country_id:
-                query_builder = query_builder.eq('country_id', country_id)
-            
-            # ✅ NEW: Apply law filter (source_id)
-            if source_id_filter:
-                query_builder = query_builder.eq('source_id', source_id_filter)
-                logger.info(f"📊 Applied law filter: source_id = {source_id_filter}")
-            
-            result = query_builder \
-                .or_(or_conditions) \
-                .limit(50) \
-                .execute()
-            
-            candidates = result.data if result.data else []
-            
-            logger.info(f"✅ SQL Search: {len(candidates)} candidates found")
+            # 🚀 STRATEGY 2: Standard SQL 'ILIKE' (Fallback)
+            if not candidates:
+                logger.info("ℹ️ Using Standard SQL Fallback...")
+                
+                # Method 1: Try OR query with variants
+                or_conditions = ','.join([f"content.ilike.%{v}%" for v in variants])
+                
+                query_builder = db.client.table('document_chunks') \
+                    .select('id, content, source_id, sequence_number, hierarchy_path, keywords, source_title')
+                
+                # Apply filters
+                if country_id:
+                    query_builder = query_builder.eq('country_id', country_id)
+                
+                # ✅ NEW: Apply law filter (source_id)
+                if source_id_filter:
+                    query_builder = query_builder.eq('source_id', source_id_filter)
+                    logger.info(f"📊 Applied law filter: source_id = {source_id_filter}")
+                
+                result = query_builder \
+                    .or_(or_conditions) \
+                    .limit(50) \
+                    .execute()
+                
+                # Standardize Fallback Results (Reconstruct Metadata)
+                candidates = []
+                if result.data:
+                    for row in result.data:
+                         item = {
+                            "id": row.get("id"),
+                            "content": row.get("content"),
+                            "similarity_score": 0.0, # Will be calculated below
+                            "source_id": row.get("source_id"),
+                            "metadata": {
+                                "source_title": row.get("source_title"),
+                                "hierarchy_path": row.get("hierarchy_path"),
+                                "keywords": row.get("keywords")
+                            }
+                        }
+                         candidates.append(item)
+
+                logger.info(f"✅ SQL Search: {len(candidates)} candidates found via ILIKE")
             
         except Exception as e:
             logger.error(f"❌ SQL Search Failed: {e}")

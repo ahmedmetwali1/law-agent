@@ -19,3 +19,9 @@
     - [x] Fix "Today's Date" issue (Inject `current_date` into Admin Planner).
     - [x] Enrich Tool Docstrings in `db_tool_factory.py` (Field descriptions, Enums).
     - [x] Verify coverage of all operational tables.
+- [ ] **Phase 7: Advanced Search Optimization** <!-- id: 6 -->
+    - [x] Debug Trigram similarity failure for numbered articles.
+    - [x] Implement "Sacred Number" logic in `check_text_existence` RPC.
+    - [x] Refactor scoring: From GREATEST (Max) to SUM (Additive) to break rankings ties.
+    - [x] Implement "Header Priority" (+3.0 for definitions in first 200 chars).
+    - [ ] Final Verification: Pure Text Search for Article 368.

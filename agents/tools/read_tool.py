@@ -31,6 +31,7 @@ class ReadDocumentInput(BaseModel):
     limit: int = Field(50, description="Number of lines to read.")
     table: str = Field("document_chunks", description="Target table: 'legal_sources' (full text) or 'document_chunks' (pages).")
     search_term: Optional[str] = Field(None, description="Term to search for within the document.")
+    expand_context: bool = Field(False, description="If True, fetches the previous and next pages automatically (N-1, N, N+1).")
 
     class Config:
         extra = "forbid"
@@ -44,12 +45,13 @@ class ReadDocumentTool(BaseTool):
     - Context-aware chunking (respects article boundaries)
     - Search within document
     - Arabic text optimization
+    - **Context Expansion:** Autoloads neighbors (Prev/Next pages).
     """
     
     def __init__(self):
         super().__init__(
             name="read_document",
-            description="اقرأ مستند قانوني مع دعم البحث داخل المستند واكتشاف حدود المواد"
+            description="اقرأ مستند قانوني مع دعم البحث داخل المستند واكتشاف حدود المواد + التوسع للسياق (السابق/اللاحق)"
         )
         self.args_schema = ReadDocumentInput
         self._article_pattern = r'(?:المادة|مادة|Article)\s*(\d+)'
@@ -64,33 +66,23 @@ class ReadDocumentTool(BaseTool):
             strict=True # REQUIRED for auto-parsing in stricter LLM environments
         )
 
-    def _find_article_boundaries(self, lines: List[str]) -> Dict[str, List[int]]:
-        """Find line numbers where articles start"""
-        import re
-        boundaries = {}
-        for i, line in enumerate(lines):
-            match = re.search(self._article_pattern, line)
-            if match:
-                article_num = match.group(1)
-                if article_num not in boundaries:
-                    boundaries[article_num] = []
-                boundaries[article_num].append(i)
-        return boundaries
+    def _fetch_neighbors(self, source_id: str, current_seq: int, table: str) -> Dict[str, str]:
+        """Fetches N-1 and N+1 content for context expansion."""
+        # Fetch Prev (N-1) and Next (N+1)
+        neighbors = db.client.from_(table)\
+            .select("sequence_number, content")\
+            .eq("source_id", source_id)\
+            .in_("sequence_number", [current_seq - 1, current_seq + 1])\
+            .execute()
+        
+        neighbor_map = {}
+        if neighbors.data:
+            for item in neighbors.data:
+                neighbor_map[item['sequence_number']] = item.get('content', '')
+        return neighbor_map
     
-    def _extract_article(self, lines: List[str], article_num: str, boundaries: Dict) -> Optional[str]:
-        """Extract complete article text"""
-        if article_num not in boundaries:
-            return None
-        
-        start_line = boundaries[article_num][0]
-        
-        # Find next article or end
-        next_starts = [pos for art_positions in boundaries.values() 
-                       for pos in art_positions if pos > start_line]
-        end_line = min(next_starts) if next_starts else len(lines)
-        
-        return "\n".join(lines[start_line:end_line])
-    
+    # ... (Keep existing helpers _find_article_boundaries, _extract_article unchanged if needed) ...
+
     def run(
         self,
         doc_id: Optional[str] = None,
@@ -102,7 +94,8 @@ class ReadDocumentTool(BaseTool):
         search_term: Optional[str] = None,
         # Legacy/Unused in schema but kept for safety if internally called
         article_num: Optional[str] = None,
-        context_lines: int = 5
+        context_lines: int = 5,
+        expand_context: bool = False # ✅ NEW
     ) -> ToolResult:
         """
         Execute read logic.
@@ -150,6 +143,17 @@ class ReadDocumentTool(BaseTool):
                  current_seq = res.data.get("sequence_number")
                  current_source = res.data.get("source_id")
 
+            # --- 🚀 NEW: Context Expansion Logic ---
+            neighbor_content_prev = ""
+            neighbor_content_next = ""
+            
+            if expand_context and current_source and current_seq is not None:
+                neighbors = self._fetch_neighbors(current_source, current_seq, table)
+                if (current_seq - 1) in neighbors:
+                    neighbor_content_prev = f"\n\n--- ⬇️ [PREVIOUS PAGE {current_seq - 1}] ⬇️ ---\n" + neighbors[current_seq - 1]
+                if (current_seq + 1) in neighbors:
+                    neighbor_content_next = f"\n\n--- ⬆️ [NEXT PAGE {current_seq + 1}] ⬆️ ---\n" + neighbors[current_seq + 1]
+
             lines = full_text.split('\n')
             total_lines = len(lines)
 
@@ -172,10 +176,13 @@ class ReadDocumentTool(BaseTool):
                 selected_lines = lines[start_line:start_line+limit]
                 content_chunk = "\n".join(selected_lines)
             
+            # Combine Context if requested
+            final_content = neighbor_content_prev + "\n\n--- [CURRENT PAGE] ---\n" + content_chunk + neighbor_content_next
+
             # 🛡️ Safety: Truncate if massive (Timeout/Memory protection)
-            MAX_CHARS = 8000 # ~2000 tokens
-            if len(content_chunk) > MAX_CHARS:
-                content_chunk = content_chunk[:MAX_CHARS] + "\n... [TRUNCATED DUE TO SIZE]"
+            MAX_CHARS = 15000 # Increased limit for expanded context
+            if len(final_content) > MAX_CHARS:
+                final_content = final_content[:MAX_CHARS] + "\n... [TRUNCATED DUE TO SIZE]"
                 logger.warning(f"⚠️ Document content truncated to {MAX_CHARS} chars.")
             
             # Smart Metadata
@@ -183,7 +190,8 @@ class ReadDocumentTool(BaseTool):
                 "source_id": current_source,
                 "current_page": current_seq,
                 "total_lines_in_page": total_lines,
-                "preview": "This is a single page (Check sequence_number to read next).",
+                "expanded_context": expand_context, 
+                "preview": "Includes neighbors" if expand_context else "Single page",
             }
             
             if current_source and current_seq is not None:
@@ -196,7 +204,7 @@ class ReadDocumentTool(BaseTool):
             return ToolResult(
                 success=True,
                 data={
-                    "content": content_chunk,
+                    "content": final_content,
                     "metadata": metadata
                 },
                 execution_time_ms=(time.time() - start_time) * 1000

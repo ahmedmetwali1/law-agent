@@ -82,7 +82,14 @@ async def council_v2_node(state: AgentState) -> Dict[str, Any]:
     
     llm = get_llm(temperature=0.3, json_mode=True)
     
+    # Prepare lawyer context
+    user_context = state.get("context", {}).get("user_context", {})
+    lawyer_name = user_context.get("full_name", "المحامي")
+    user_country_id = user_context.get("country_id", "غير محدد")
+
     prompt = COUNCIL_V2_COT_PROMPT.format(
+        lawyer_name=lawyer_name,
+        user_country_id=user_country_id,
         facts=facts_text,
         research=research_text
     )
@@ -97,7 +104,17 @@ async def council_v2_node(state: AgentState) -> Dict[str, Any]:
         )
         
         # Parse strategy
-        strategy = json.loads(response.content)
+        # ✅ FIX: Robust JSON Extraction (Regex)
+        import re
+        content = response.content
+        json_match = re.search(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
+        
+        if json_match:
+             json_str = json_match.group(1)
+             strategy = json.loads(json_str)
+        else:
+             # Try direct parse if no blocks
+             strategy = json.loads(content)
         
         logger.info("✅ Council V2 Analysis Complete")
         logger.info(f"  • Understanding: {len(strategy.get('understanding', {}))} points")

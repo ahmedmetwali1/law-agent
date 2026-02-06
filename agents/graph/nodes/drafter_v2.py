@@ -33,6 +33,8 @@ PLANNER_PROMPT = """
 {strategy}
 
 ## السياق:
+شريكك المحامي: {lawyer_name}
+الدولة/النظام: {user_country_id}
 {facts}
 
 ## البحث القانوني:
@@ -42,7 +44,7 @@ PLANNER_PROMPT = """
 
 ## المهمة:
 
-قم ببناء **هيكل منظم** للمستند النهائي على شكل أقسام واضحة.
+قم ببناء **هيكل منظم** للمستند النهائي على شكل أقسام واضحة، بما يتوافق مع الأنظمة المرعية في **{user_country_id}**.
 
 **الصيغة المطلوبة (JSON):**
 
@@ -80,9 +82,12 @@ WRITER_PROMPT = """
 أنت كاتب المستندات القانونية - خبير في الكتابة القانونية الاحترافية.
 
 ## القسم المطلوب كتابته:
+## القسم المطلوب كتابته:
 **العنوان:** {section_title}
 **الهدف:** {section_purpose}
 **النقاط الرئيسية:** {section_points}
+
+**السياق:** محامي: {lawyer_name} | دولة: {user_country_id}
 
 ## الاستراتيجية:
 {strategy}
@@ -261,10 +266,17 @@ async def drafter_v2_node(state: AgentState) -> Dict[str, Any]:
     research_text = _format_research(research)
     strategy_text = json.dumps(strategy, ensure_ascii=False, indent=2)
     
+    # Prepare lawyer context
+    user_context = state.get("context", {}).get("user_context", {})
+    lawyer_name = user_context.get("full_name", "المحامي")
+    user_country_id = user_context.get("country_id", "غير محدد")
+
     # ===== PHASE 1: PLANNING =====
     logger.info("📋 Phase 1: Planning Document Structure...")
     
-    plan = await _plan_document(strategy_text, facts_text, research_text)
+    logger.info("📋 Phase 1: Planning Document Structure...")
+    
+    plan = await _plan_document(strategy_text, facts_text, research_text, lawyer_name, user_country_id)
     
     logger.info(f"✅ Plan created: {len(plan.get('sections', []))} sections")
     
@@ -277,7 +289,9 @@ async def drafter_v2_node(state: AgentState) -> Dict[str, Any]:
     sections_content = await _write_sections(
         plan.get("sections", []),
         strategy_text,
-        research_text
+        research_text,
+        lawyer_name,
+        user_country_id
     )
     
     logger.info(f"✅ Wrote {len(sections_content)} sections")
@@ -317,7 +331,7 @@ async def drafter_v2_node(state: AgentState) -> Dict[str, Any]:
 
 # ==================== HELPER FUNCTIONS ====================
 
-async def _plan_document(strategy: str, facts: str, research: str) -> Dict:
+async def _plan_document(strategy: str, facts: str, research: str, lawyer_name: str, user_country_id: str) -> Dict:
     """Planning Phase"""
     
     llm = get_llm(temperature=0.2, json_mode=True)
@@ -325,7 +339,9 @@ async def _plan_document(strategy: str, facts: str, research: str) -> Dict:
     prompt = PLANNER_PROMPT.format(
         strategy=strategy,
         facts=facts,
-        research=research
+        research=research,
+        lawyer_name=lawyer_name,
+        user_country_id=user_country_id
     )
     
     # ✅ PHASE 1 FIX: Timeout for planning
@@ -363,7 +379,7 @@ async def _plan_document(strategy: str, facts: str, research: str) -> Dict:
         }
 
 
-async def _write_sections(sections: List[Dict], strategy: str, research: str) -> Dict[str, str]:
+async def _write_sections(sections: List[Dict], strategy: str, research: str, lawyer_name: str, user_country_id: str) -> Dict[str, str]:
     """Writing Phase"""
     
     llm = get_llm(temperature=0.4)
@@ -384,7 +400,9 @@ async def _write_sections(sections: List[Dict], strategy: str, research: str) ->
             section_purpose=purpose,
             section_points=json.dumps(points, ensure_ascii=False),
             strategy=strategy,
-            research=research
+            research=research,
+            lawyer_name=lawyer_name,
+            user_country_id=user_country_id
         )
         
         try:

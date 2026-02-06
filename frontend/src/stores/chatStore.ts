@@ -36,6 +36,13 @@ export interface ActivityState {
     isThinking: boolean
 }
 
+export interface HCFDecision {
+    path: 'DIRECT' | 'ANALOGICAL' | 'BOUNDING' | 'FALLBACK' | 'UNKNOWN';
+    status: 'VERIFIED_SOURCE' | 'VERIFIED_ANALOGY' | 'UNVERIFIED_ESTIMATE' | 'UNVERIFIED' | 'UNKNOWN';
+    confidence: number;
+    timestamp: Date;
+}
+
 interface ChatState {
     messages: Message[]
     isStreaming: boolean
@@ -48,13 +55,15 @@ interface ChatState {
         activeAgents: string[]
         monologues: MonologueEntry[]
     }
+    hcfDecisions: HCFDecision[];
 
     sendMessage: (content: string, options?: { session_id?: string }) => Promise<void>
     stopGeneration: () => void
     addMessage: (message: Message) => void
     clearChat: () => void
-    setRoute: (route: string) => void
+    setRoute: (route) => void
     resetActivity: () => void
+    hydrateFromMessages: (messages: Message[]) => void
 }
 
 export const useChatStore = create<ChatState>()(
@@ -76,11 +85,13 @@ export const useChatStore = create<ChatState>()(
                 activeAgents: [],
                 monologues: []
             },
+            hcfDecisions: [],
 
             resetActivity: () => {
                 set({
                     currentActivity: { stage: 'IDLE', actor: 'System', action: 'Ready', isThinking: false },
-                    councilSession: { activeAgents: [], monologues: [] }
+                    councilSession: { activeAgents: [], monologues: [] },
+                    hcfDecisions: []
                 })
             },
 
@@ -94,7 +105,8 @@ export const useChatStore = create<ChatState>()(
                 // Reset Activity for new turn
                 set({
                     currentActivity: { stage: 'ROUTING', actor: 'System', action: 'Starting...', isThinking: true },
-                    councilSession: { activeAgents: [], monologues: [] } // Clear previous council session? Or keep history? clearing for now.
+                    councilSession: { activeAgents: [], monologues: [] }, // Clear previous council session
+                    hcfDecisions: []
                 })
 
                 const userMessage: Message = {
@@ -118,6 +130,7 @@ export const useChatStore = create<ChatState>()(
 
                 set((state) => ({ messages: [...state.messages, assistantMessage] }))
 
+                let accumulatedContent = ''
                 try {
                     // Use the specific stream endpoint!
                     const response = await fetch('/api/chat/stream', {
@@ -140,7 +153,7 @@ export const useChatStore = create<ChatState>()(
                     const reader = response.body.getReader()
                     const decoder = new TextDecoder()
                     let buffer = ''
-                    let accumulatedContent = ''
+
 
                     while (true) {
                         const { done, value } = await reader.read()
@@ -163,6 +176,17 @@ export const useChatStore = create<ChatState>()(
                                     if (data.type === 'stage_change') {
                                         set((state) => ({
                                             currentActivity: { ...state.currentActivity, stage: data.stage }
+                                        }))
+                                    }
+                                    else if (data.type === 'hcf_decision') {
+                                        const { selected_path, verification_status, confidence_score } = data.payload
+                                        set((state) => ({
+                                            hcfDecisions: [...state.hcfDecisions, {
+                                                path: selected_path,
+                                                status: verification_status,
+                                                confidence: confidence_score,
+                                                timestamp: new Date()
+                                            }]
                                         }))
                                     }
                                     else if (data.type === 'step_update') {
@@ -263,9 +287,55 @@ export const useChatStore = create<ChatState>()(
                 messages: [...state.messages, message]
             })),
 
-            clearChat: () => set({ messages: [], councilSession: { activeAgents: [], monologues: [] } }),
+            clearChat: () => set({ messages: [], councilSession: { activeAgents: [], monologues: [] }, hcfDecisions: [] }),
 
-            setRoute: (route) => set({ currentRoute: route }),
+            setRoute: (route: string) => set({ currentRoute: route }),
+
+            hydrateFromMessages: (messages) => {
+                const monologues: MonologueEntry[] = [];
+                const decisions: HCFDecision[] = [];
+                const agents = new Set<string>();
+
+                messages.forEach(msg => {
+                    // Check for metadata in the message object (needs to be added to interface if strict)
+                    // We assume it might be passed or we need to fetch it.
+                    // Actually, the Message interface needs 'metadata' property.
+                    const meta = (msg as any).metadata;
+                    if (meta) {
+                        if (meta.council_log && Array.isArray(meta.council_log)) {
+                            meta.council_log.forEach((log: any) => {
+                                monologues.push({
+                                    id: crypto.randomUUID(),
+                                    agent: log.agent,
+                                    content: log.content,
+                                    timestamp: new Date(log.timestamp)
+                                });
+                                agents.add(log.agent);
+                            });
+                        }
+                        if (meta.hcf_log && Array.isArray(meta.hcf_log)) {
+                            meta.hcf_log.forEach((dec: any) => {
+                                decisions.push({
+                                    path: dec.selected_path,
+                                    status: dec.verification_status,
+                                    confidence: dec.confidence_score,
+                                    timestamp: new Date() // fallback if no timestamp in log
+                                });
+                            });
+                        }
+                    }
+                });
+
+                if (monologues.length > 0 || decisions.length > 0) {
+                    set({
+                        councilSession: {
+                            activeAgents: Array.from(agents),
+                            monologues: monologues.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+                        },
+                        hcfDecisions: decisions
+                    });
+                }
+            }
         }),
         {
             name: 'legal-ai-chat-v3', // New storage key to avoid conflict

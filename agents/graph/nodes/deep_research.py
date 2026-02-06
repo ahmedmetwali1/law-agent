@@ -13,6 +13,15 @@ import logging
 
 from ...tools.legal_blackboard_tool import LegalBlackboardTool
 
+# ✅ Phase 1: Context Enrichment Integration
+from agents.core.conversation_state_manager import ConversationStateManager, ConversationContext
+from agents.core.context_enrichment import ContextEnrichmentLayer, enrich_query_with_context
+
+# ✅ Phase 2: Performance Optimizations
+from agents.core.timeout_strategy import AdaptiveTimeoutStrategy, QueryComplexity, get_timeout
+from agents.core.search_cache import get_search_cache, SearchCache
+from agents.core.query_rewriter import QueryRewriter, expand_query
+
 logger = logging.getLogger(__name__)
 
 # Initialize tools
@@ -20,6 +29,15 @@ hybrid_search = HybridSearchTool()
 blackboard = LegalBlackboardTool()
 doc_tool = GetRelatedDocumentTool()
 principle_search = FlexibleSearchTool()
+
+# ✅ Phase 1: Initialize context managers
+context_state_manager = ConversationStateManager(max_history_messages=5)
+context_enrichment_layer = ContextEnrichmentLayer()
+
+# ✅ Phase 2: Initialize performance optimization tools
+timeout_strategy = AdaptiveTimeoutStrategy()
+search_cache = get_search_cache()
+query_rewriter = QueryRewriter(max_variants=3)
 
 async def deep_research_node(state: AgentState) -> Dict[str, Any]:
     """
@@ -200,26 +218,75 @@ async def deep_research_node(state: AgentState) -> Dict[str, Any]:
     if intent == "LEGAL_SIMPLE":
         logger.info("⚡ Simple Query Detected: Synthesizing Answer directly.")
         
-        summary_llm = get_llm(temperature=0.2)
-        summary_prompt = f"""
-        You are the Legal Researcher.
-        User Query: {user_input}
+        # ✅ FIX: HCF PROTOCOL (Honor Constraint Framework)
+        # Replaces simple summary with 3-Phase Verification Loop
         
-        Found Information:
-        {str(results)[:2500]}
+        # 1. Prepare Context (Full Chapter)
+        full_context_str = str(results) # Current Context Window is large enough (128k+)
         
-        Task: You are a Direct Legal Assistant.
-        1. Answer the user's question IMMEDIATELY based on the found info.
-        2. Use Standard Legal Arabic (Fosha) ONLY. Do NOT ask about dialects.
-        3. Do NOT ask "Do you want me to explain?". Just explain. 
-        4. Cite the article numbers if available.
+        # 2. Prepare Prompt
+        # We use temperature=0.3 to allow "Divergent Generation" (Phase 1)
+        # followed by strict "Verification" (Phase 2)
+        hcf_llm = get_llm(temperature=0.3)
         
-        Refusal to Answer Policy:
-        - If the search results are empty, apologize.
-        - If the search results are present, YOU MUST ANSWER.
-        """
+        hcf_formatted_prompt = HCF_RESEARCH_PROMPT.format(
+            user_query=user_input,
+            found_context=full_context_str
+        )
         
-        answer = await summary_llm.ainvoke([SystemMessage(content=summary_prompt)])
+        # 3. Execute with Circuit Breaker (Fallback Strategy)
+        final_answer = ""
+        
+        try:
+            logger.info("🛡️ Invoking HCF: 3-Phase Verification Protocol...")
+            response = await hcf_llm.ainvoke([SystemMessage(content=hcf_formatted_prompt)])
+            content = response.content
+            
+            # Robust Parsing: Look for JSON block (Flexible: with or without 'json' label)
+            import re
+            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+                data = json.loads(json_str)
+                
+                # Check Verification Status
+                status = data.get("verification_status", "UNKNOWN")
+                selected_path = data.get("selected_path", "UNKNOWN")
+                final_answer = data.get("final_answer_ar", "")
+                
+                logger.info(f"✅ HCF Success: Path={selected_path} | Status={status}")
+                
+            else:
+                raise ValueError("No JSON block found in HCF response")
+
+        except Exception as e:
+            logger.warning(f"⚠️ HCF Failed (Circuit Breaker Triggered): {e}")
+            logger.info("🔄 Fallback: Reverting to Legacy Direct Answer Prompt")
+            
+            # Fallback to Legacy Prompt (to ensure user gets an answer)
+            fallback_llm = get_llm(temperature=0.2)
+            fallback_prompt = f"""
+            SYSTEM FAILURE RECOVERY MODE.
+            User Query: {user_input}
+            Context: {full_context_str[:15000]}
+            
+            Task: Provide a direct, professional legal answer in Arabic.
+            Cite sources if visible. If not, state that no direct text was found.
+            """
+            fallback_res = await fallback_llm.ainvoke([SystemMessage(content=fallback_prompt)])
+            final_answer = fallback_res.content
+        
+        return {
+            "next_agent": "end", # Signal to Graph
+            "conversation_stage": "COMPLETED",
+            "final_response": final_answer,
+            "hcf_details": {
+                "selected_path": selected_path if 'selected_path' in locals() else "FALLBACK",
+                "verification_status": status if 'status' in locals() else "UNVERIFIED",
+                "confidence_score": data.get("confidence_score") if 'data' in locals() else 0.0
+            }
+        }
         
         return {
             "next_agent": "end", # Signal to Graph
@@ -261,17 +328,69 @@ async def _resolve_country_id(country_name: str) -> str:
         
     return None
 
-from ...prompts.research_prompts import DEEP_RESEARCH_PROMPT
+from ...prompts.research_prompts import DEEP_RESEARCH_PROMPT, HCF_RESEARCH_PROMPT
 
 async def _execute_search_logic(state, facts, query) -> Dict[str, Any]:
     """
     Executes the actual Research Logic (Plan -> Search -> Expand).
-    Restored from original deep_research_node.
+    
+    ✅ ENHANCED: Now uses Context Enrichment to prevent context loss.
+    The "في أي نظام" problem is solved by enriching ambiguous queries
+    with entities from chat history before search.
     """
     user_context = state.get("context", {}).get("user_context", {})
-    user_country_id = user_context.get("country_id") 
+    user_country_id = user_context.get("country_id")
+    chat_history = state.get("chat_history", [])
     
-    # 1. Plan Queries
+    # =========================================================================
+    # ✅ CONTEXT ENRICHMENT (NEW - Solves "في أي نظام" problem)
+    # =========================================================================
+    original_query = query
+    enriched_query_obj = None
+    
+    try:
+        # Extract conversation context from history
+        conversation_context = context_state_manager.extract_context_from_history(
+            chat_history=chat_history,
+            current_query=query
+        )
+        
+        # Check if query is ambiguous and needs enrichment
+        if context_enrichment_layer.is_ambiguous(query):
+            logger.info(f"🔍 Ambiguous query detected: '{query}'")
+            
+            enriched_query_obj = context_enrichment_layer.resolve_with_context(
+                query=query,
+                context=conversation_context
+            )
+            
+            if enriched_query_obj.enriched != query:
+                query = enriched_query_obj.enriched
+                logger.info(f"✨ Query enriched: '{original_query}' → '{query}'")
+                logger.info(f"   Entities used: {enriched_query_obj.entities_used}")
+                logger.info(f"   Confidence: {enriched_query_obj.confidence:.2f}")
+            
+            # If requires clarification and low confidence, could trigger user question
+            if enriched_query_obj.requires_clarification and enriched_query_obj.confidence < 0.4:
+                logger.warning(f"⚠️ Low confidence enrichment - may need user clarification")
+        
+        # Save context to blackboard for persistence
+        session_id = state.get("session_id") or "unknown_session"
+        if not conversation_context.is_empty():
+            context_state_manager.save_context_to_blackboard(
+                context=conversation_context,
+                session_id=session_id,
+                blackboard=blackboard
+            )
+    
+    except Exception as e:
+        logger.error(f"Context enrichment failed: {e}", exc_info=True)
+        # Fallback: use original query
+        query = original_query
+    
+    # =========================================================================
+    # 1. Plan Queries (Keyword Extraction)
+    # =========================================================================
     llm = get_llm(temperature=0.3, json_mode=False)
     
     # Format inputs
@@ -357,21 +476,35 @@ async def _execute_search_logic(state, facts, query) -> Dict[str, Any]:
         citations_map = {}
         strategy_used = "error_fallback"
 
-    # 3. Expand Context (Siblings) - Keep this enrichment
+    # 3. Expand Context (Rich Reading)
+    # ✅ FIX: Automatically fetch Preceding (N-1) and Succeeding (N+1) articles
+    # This solves the user complaint about "partial info" by reading the full neighborhood.
+    from ...tools.read_tool import ReadDocumentTool
+    read_tool = ReadDocumentTool()
+    
     seen_ids = set(r.get("id") for r in flat_results)
     
-    for item in flat_results[:5]: # Top 5 only
+    # Only expand the TOP 3 most relevant results to save tokens/time
+    for item in flat_results[:3]: 
         item_id = item.get("id")
         meta = item.get("metadata", {}) or {}
+        
+        # Check if it has sequence_number (i.e., it's a Book/Page)
         if meta.get("sequence_number") is not None and item_id:
-             sib_res = doc_tool.run(chunk_id=item_id, include_siblings=True, sibling_limit=2)
-             if sib_res.success:
-                 siblings = sib_res.data.get("siblings", [])
-                 if siblings:
-                     siblings.sort(key=lambda x: x.get("sequence_number", 0))
-                     full_text = "\n".join([s.get("content", "") for s in siblings])
-                     item["content"] = f"__EXPANDED_CONTEXT__:\n{full_text}"
+             # Use the new 'expand_context' feature
+             read_res = read_tool.run(
+                 doc_id=item_id, 
+                 expand_context=True
+             )
+             
+             if read_res.success:
+                 expanded_content = read_res.data.get("content", "")
+                 if expanded_content:
+                     # Replace the short snippet with the Full Expanded Neighborhood
+                     item["content"] = expanded_content
                      item["metadata"]["expanded"] = True
+                     item["metadata"]["context_type"] = "neighborhood_n1_p1"
+                     logger.info(f"📖 Auto-Expanded Doc {item_id}: Loaded Neighborhood (Prev/Next)")
 
     # 4. Legal Principles (Flexible Search) - Keep this enrichment
     # We use the generated queries from step 1 for this, as they might catch principles

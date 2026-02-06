@@ -107,22 +107,24 @@ class ChatService:
                 # 2. Try fetching Country (Bonus) - Separate query to avoid 400 if relation broken
                 if data.get("country_id"):
                     try:
-                        c_res = db.table("countries").select("name, name_ar").eq("id", data["country_id"]).single().execute()
+                        # 🛑 SAFETY: Use select("*") to avoid "column does not exist" errors if schema drifts
+                        c_res = db.table("countries").select("*").eq("id", data["country_id"]).single().execute()
                         if c_res.data:
-                            user_context["country_name"] = c_res.data.get("name")
+                            user_context["country_name"] = c_res.data.get("name_en")
                             user_context["country_name_ar"] = c_res.data.get("name_ar")
                     except Exception as ce:
-                        logger.warning(f"Feature degradation: Could not fetch country name: {ce}")
+                        logger.warning(f"Feature degradation: Could not fetch country details: {ce}")
 
                 # 3. Try fetching Role (Bonus)
                 if data.get("role_id"):
                     try:
-                        r_res = db.table("roles").select("name, name_ar").eq("id", data["role_id"]).single().execute()
+                        # 🛑 SAFETY: Use select("*") for robustness
+                        r_res = db.table("roles").select("*").eq("id", data["role_id"]).single().execute()
                         if r_res.data:
                             user_context["role_name"] = r_res.data.get("name")
                             user_context["role_name_ar"] = r_res.data.get("name_ar")
                     except Exception as re:
-                        logger.warning(f"Feature degradation: Could not fetch role name: {re}")
+                        logger.warning(f"Feature degradation: Could not fetch role details: {re}")
 
                 logger.info(f"✅ Enriched full user context: {user_context.get('full_name')} ({user_context.get('role_name_ar')})")
         except Exception as e:
@@ -347,6 +349,8 @@ class ChatService:
         
             # 5. Execute Graph with Strict Event Routing
         ai_content = "" # Accumulator for final DB save
+        council_log = [] # Capture Council Monologues for DB
+        hcf_log = [] # Capture HCF Decisions for DB
         
         try:
             async for event in graph.astream_events(input_state, config=config, version="v1"):
@@ -396,6 +400,8 @@ class ChatService:
                             opinions = output["council_opinions"]
                             if opinions and isinstance(opinions, dict):
                                 for agent, text in opinions.items():
+                                    # CAPTURE FOR DB
+                                    council_log.append({"agent": agent, "content": text, "timestamp": datetime.now().isoformat()})
                                     yield f"data: {json.dumps({'type': 'reasoning_chunk', 'content': f'[{agent.upper()}]: {text}\n'})}\n\n"
 
                         # 2. JUDGE (The Voice)
@@ -431,6 +437,13 @@ class ChatService:
 
                         # 4. DEEP RESEARCH (The Scout Speaking Directly)
                         elif name == "deep_research":
+                            # Stream HCF Verification Data First
+                            hcf_details = output.get("hcf_details")
+                            if hcf_details and isinstance(hcf_details, dict):
+                                # CAPTURE FOR DB
+                                hcf_log.append(hcf_details)
+                                yield f"data: {json.dumps({'type': 'hcf_decision', 'payload': hcf_details})}\n\n"
+
                             final_res = output.get("final_response")
                             if final_res:
                                 if isinstance(final_res, dict):
@@ -464,7 +477,12 @@ class ChatService:
                     "session_id": session_id,
                     "role": "assistant",
                     "content": ai_content,
-                    "metadata": {"streamed": True, "protocol": "viva_v1"}
+                    "metadata": {
+                        "streamed": True, 
+                        "protocol": "viva_v1",
+                        "council_log": council_log,
+                        "hcf_log": hcf_log
+                    }
                 }).execute()
                 yield f"data: {json.dumps({'type': 'ai_message_saved', 'message': {'content': ai_content}})}\n\n"
             except Exception as e:

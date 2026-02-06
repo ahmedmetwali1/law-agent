@@ -131,17 +131,19 @@ def fast_track_node(state: AgentState) -> Dict[str, Any]:
     """
     logger.info("🚀 Fast Track executing...")
     
+    user_context = state.get("context", {}).get("user_context", {})
+    lawyer_name = user_context.get("full_name", "المحامي")
     user_input = state.get("input", "").lower()
     
     # Simple Template Responses
-    response = "مرحباً! أنا مارد، مساعدك القانوني الذكي. كيف يمكنني مساعدتك اليوم؟"
+    response = f"مرحباً أستاذ {lawyer_name}! أنا مارد، مساعدك القانوني الذكي. كيف يمكنني مساعدتك اليوم؟"
     
     if "morning" in user_input or "صباح" in user_input:
-        response = "صباح النور والسرور! تفضل، أنا في الخدمة."
+        response = f"صباح النور يا أستاذ {lawyer_name}! تفضل، أنا في الخدمة."
     elif "evening" in user_input or "مساء" in user_input:
-        response = "مساء الخير! كيف أخدمك الليلة؟"
+        response = f"مساء الخير أستاذ {lawyer_name}! كيف أخدمك الليلة؟"
     elif "thank" in user_input or "شكرا" in user_input or "عافية" in user_input:
-        response = "العفو! واجبي يا أستاذ. هل لديك أي استفسار آخر؟"
+        response = f"العفو يا أستاذ {lawyer_name}! واجبي. هل لديك أي استفسار آخر؟"
         
     logger.info(f"🚀 Fast Track Response: {response}")
     

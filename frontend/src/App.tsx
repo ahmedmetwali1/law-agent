@@ -38,7 +38,6 @@ import SupportTicketsPage from './pages/admin/SupportTicketsPage'
 import { AIPage } from './pages/AIPage'
 import { Dashboard } from './pages/Dashboard'
 import AIChatPage from './pages/AIChatPage'
-import N8NChatPage from './pages/N8NChatPage'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import { AppShell } from './components/layout/AppShell'
 import { RequireAuth } from './components/auth/RequireAuth'
@@ -82,7 +81,6 @@ function App() {
                                     <Route index element={<Navigate to="/dashboard" replace />} />
                                     <Route path="dashboard" element={<Dashboard />} />
                                     <Route path="chat" element={<AIChatPage />} />
-                                    <Route path="n8n-chat" element={<N8NChatPage />} />
                                     <Route path="clients" element={<Clients />} />
                                     <Route path="clients/:id" element={<ClientProfile />} />
                                     <Route path="cases" element={<CasesPage />} />

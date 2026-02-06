@@ -88,7 +88,7 @@ class LegalBlackboardTool:
         """
         Updates a specific JSONB segment with OPTIMISTIC LOCKING Protection.
         """
-        valid_segments = ["facts_snapshot", "research_data", "debate_strategy", "drafting_plan", "final_output", "agent_thinking"]
+        valid_segments = ["facts_snapshot", "research_data", "debate_strategy", "drafting_plan", "final_output", "agent_thinking", "conversation_context"]
         if segment not in valid_segments:
             logger.error(f"Invalid blackboard segment: {segment}")
             return False
