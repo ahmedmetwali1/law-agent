@@ -1,102 +1,78 @@
-# Marid: Professional Legal AI Multi-Agent System ⚖️🤖
+# Marid V2.0: Legal Intelligence System
 
-**Marid** is a state-of-the-art, high-performance legal office management and AI advisory platform. Designed for modern law firms, it orchestrates a complex network of specialized AI agents to handle everything from administrative tasks to deep legal research and document drafting.
-
----
-
-## 🛠️ Core Technology Stack
-
-### **Frontend (The Interface of Intelligence)**
-- **Framework:** React 18 (Vite-powered)
-- **Language:** TypeScript (Strict Type Safety)
-- **UI Architecture:** 
-  - **Tailwind CSS** for modern, responsive aesthetics.
-  - **Radix UI Primitives** for accessible, premium components.
-  - **Lucide React** for consistent iconography.
-- **State & Data:**
-  - **Zustand** for lightweight, high-performance global state.
-  - **TanStack Query (React Query)** for robust server-state management and caching.
-- **Communication:** Axios & Supabase JS Client.
-
-### **Backend (The Cognitive Engine)**
-- **Framework:** FastAPI (Python 3.10+)
-- **Agent Orchestration:** **LangGraph** (Stateful Multi-Agent Workflows).
-- **Core AI Integration:** LangChain, OpenAI, Anthropic, and Google Gemini.
-- **Data Validation:** Pydantic v2.
-- **Caching:** Redis-ready for high-scale performance.
-- **Real-time:** WebSockets for agent perception and live updates.
-
-### **Infrastructure & Database**
-- **Persistence:** PostgreSQL (via Supabase).
-- **Security:** Supabase Auth (JWT) + custom RBAC (Role-Based Access Control).
-- **Storage:** S3-compatible cloud storage and local encrypted backups.
-- **Search:** Hybrid Search (Vector + Full-Text) for precision legal retrieval.
+Marid is a **LangGraph-driven Multi-Agent System** engineered for the legal domain. It combines Retrieval-Augmented Generation (RAG) with a rigorous "Honor Constraint Framework" (HCF) to ensure high-fidelity legal reasoning, citation accuracy, and transparent deliberation.
 
 ---
 
-## 🏗️ Architectural Overview: The Agent Graph
+## 🏗️ Architecture: The "Legal Blackboard"
 
-Marid utilizes a non-linear, graph-based architecture using **LangGraph**. Unlike simple chatbots, Marid transitions through cognitive states based on the complexity of the legal query.
+Marid operates on a stateful, graph-based architecture where specialized agents collaborate around a shared memory structure called the **Legal Blackboard**.
 
-### **The Cognitive Workflow**
-1.  **Gatekeeper Node:** Analyzes user intent and classifies the query (Administrative vs. Legal).
-2.  **Stateless Router:** Dispatches tasks to specialized agent clusters.
-3.  **Specialized Agent Nodes:**
-    - **ResearchNode:** Performs deep-dive legal lookups in the knowledge base.
-    - **CouncilNode:** Aggregates legal opinions and performs multi-step reasoning.
-    - **DraftNode:** Generates professional legal documents from templates or research.
-    - **AdminOpsNode:** Interacts with the office database (Clients, Cases, Hearings).
-4.  **Reflector / Reviewer:** Self-corrects and verifies the output for legal accuracy before finalization.
-
----
-
-## 📁 System Blueprint
-
-```text
-e:\law
-├── agents/             # The "Brain" of the system
-│   ├── graph/          # LangGraph definitions (nodes, state, subgraphs)
-│   ├── persistence/    # Postgres & Supabase persistence layers
-│   ├── tools/          # Custom-built tools (Hybrid Search, Legal Blackboard)
-│   └── prompts/        # Centralized system prompts & templates
-├── api/                # The "Central Nervous System"
-│   ├── main.py         # Entry point & router registration
-│   ├── services/       # Business logic (Chat, Admin, Deliberation)
-│   └── routers/        # Modular API endpoints
-├── frontend/           # The "Sense" (UI/UX)
-│   ├── src/api/        # BFF (Backend-for-Frontend) integration
-│   ├── src/components/ # Modular, reusable shadcn-inspired components
-│   └── src/stores/     # Zustand stores for real-time UI state
-└── migrations/         # Database evolution & SQL schemas
-```
+### **Core Components**
+*   **Legal Blackboard (Postgres):** The definitive "Source of Truth". A versioned state machine that stores:
+    *   `facts_snapshot`: Verified case facts extracted by the Investigator.
+    *   `research_data`: Raw legal texts and citations found by the Researcher.
+    *   `council_monologues`: Real-time strategic debates between internal agents.
+    *   `hcf_decisions`: Verification status of every legal claim (Source vs. Analogy).
+*   **LangGraph Orchestrator:** Manages the non-linear flow between agents (Investigator -> Researcher -> Council -> Draft).
+*   **Context Enrichment Layer:** A middleware that resolves ambiguous queries (e.g., "in the second article") by injecting entity-rich context from conversation history before search execution.
 
 ---
 
-## 🚀 Professional Setup & Deployment
+## 🛡️ The Honor Constraint Framework (HCF)
 
-### **Prerequisites**
-- **Node.js** v18+ & **pnpm** (Recommended)
-- **Python** 3.10+
-- **Supabase Account** with PostgreSQL & Vector Extension.
-- **Environment Variables:** Configure `.env` based on the internal security protocol.
+Marid distinguishes itself through **HCF**, a protocol that enforces "Digital Honor" in legal citations.
 
-### **Backend Initialization**
+### **Mechanism**
+1.  **Phase 1: Divergent Search:** The Researcher agent casts a wide net using `HybridSearchV3` (Vector + Keyword + Trigram).
+2.  **Phase 2: Strict Verification:**
+    *   **Direct Match:** If an exact article text is found, it is flagged as `VERIFIED_SOURCE`.
+    *   **Analogical Reasoning:** If no text exists, the agent must explictly declare it as `VERIFIED_ANALOGY` (Qi'yas) or `STRATEGIC_ESTIMATION`.
+    *   **Hallucination Block:** Any claim not supported by the retrieved context is rejected.
+3.  **Phase 3: The Deliberation Room:** A UI-visible layer where the "Council" agents (Legislator, Strategist, Devils' Advocate) debate the findings in real-time.
+
+---
+
+## ⚙️ Tech Stack & Protocols
+
+| Component | Technology | Rationale |
+| :--- | :--- | :--- |
+| **Backend** | Python 3.10+, FastAPI | Native support for LangChain & async processing. |
+| **Orchestration** | LangGraph | Stateful, cyclic agent workflows (unlike linear Chains). |
+| **Persistence** | PostgreSQL + Supabase | Row-Level Security (RLS) & JSONB for flexible state. |
+| **Streaming** | Server-Sent Events (SSE) | Real-time token streaming + custom "Council" events. |
+| **Search** | Hybrid (pgvector + BM25) | High-recall legal retrieval (Semantic + Term-based). |
+| **Frontend** | React 18, Zustand, Tailwind | High-performance, identifying "Active Thinking" states. |
+
+---
+
+## 🚀 Setup & Local Deployment
+
+### **1. Environment Configuration**
+Ensure `.env` contains the following critical keys:
 ```bash
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # venv\Scripts\activate on Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run migrations
-python migrations/run_migrations.py
-
-# Launch API
-uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+SUPABASE_URL=...
+SUPABASE_KEY=...
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=... # For Council Agents (OPUS/SONNET)
+LOG_LEVEL=INFO
 ```
 
-### **Frontend Initialization**
+### **2. Database Migrations**
+Initialize the `legal_blackboard` and `hcf_logs` tables:
+```bash
+python migrations/run_migrations.py
+```
+
+### **3. Backend Service**
+Launch the API server with auto-reload:
+```bash
+cd e:\law
+python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### **4. Frontend Interface**
+Start the Vite development server:
 ```bash
 cd frontend
 npm install
@@ -105,29 +81,14 @@ npm run dev
 
 ---
 
-## ⚖️ Security & Data Governance
+## 📡 API Streaming Protocol (The "Viva" Protocol)
 
-- **Zero Trust:** All Backend requests are validated via JWT tokens.
-- **RLS (Row Level Security):** Data is isolated at the database level using Supabase RLS policies.
-- **Audit Logging:** Every administrative action is logged in a secure, non-erasable audit trail.
-- **Sanitization:** All agent outputs are sanitized to prevent injection or leaking of PII (Personally Identifiable Information).
-
----
-
-## 📖 API Documentation
-
-Detailed OpenAPI documentation is available at:
-- **Swagger UI:** `http://localhost:8000/docs`
-- **ReDoc:** `http://localhost:8000/redoc`
-
-### **Primary Endpoints**
-- `POST /api/chat/message`: The entry point for the Multi-Agent engine.
-- `GET /api/dashboard/stats`: Global office analytics.
-- `PATCH /api/cases/{case_id}`: Secure case state transitions.
+The frontend consumes a unified SSE stream that multiplexes multiple event types:
+- `token`: Standard LLM text chunks.
+- `step_update`: Agent state transitions (e.g., "Investigating -> Deliberating").
+- `reasoning_chunk`: Raw thought process from the Judge or Council (Private/Public).
+- `hcf_decision`: Structured JSON payload containing verification metadata.
 
 ---
 
-> [!IMPORTANT]
-> This project is a **private, proprietary system**. Unauthorized access or distribution of the code or data is strictly prohibited.
-
-**© 2026 Marid AI Systems. All rights reserved.**
+**© 2026 Marid AI Systems. Proprietary & Confidential.**
